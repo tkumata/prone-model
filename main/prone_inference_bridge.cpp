@@ -14,7 +14,7 @@ static constexpr float DETECTOR_MSR_SCORE_TH = 0.30f;
 static constexpr float DETECTOR_MSR_NMS_TH = 0.45f;
 static constexpr float DETECTOR_MNP_SCORE_TH = 0.35f;
 static constexpr float DETECTOR_MNP_NMS_TH = 0.45f;
-static constexpr float FACE_DETECTED_SCORE_TH = 0.35f;
+static constexpr float FACE_DETECTED_SCORE_TH = 0.40f;
 
 static human_face_detect::MSRMNP *s_detector;
 static prone_inference_status_t s_status = PRONE_INFERENCE_STATUS_NOT_READY;
@@ -96,15 +96,18 @@ esp_err_t prone_inference_run_jpeg(const uint8_t *jpeg_data,
         }
     }
 
+    const bool score_passed = best >= FACE_DETECTED_SCORE_TH;
+    const bool box_valid = (best_x0 >= 0) && (best_y0 >= 0) && (best_x1 > best_x0) && (best_y1 > best_y0);
+
     *confidence = best;
-    *is_face_detected = best >= FACE_DETECTED_SCORE_TH;
+    *is_face_detected = score_passed && box_valid;
 
     out_box->x0 = best_x0;
     out_box->y0 = best_y0;
     out_box->x1 = best_x1;
     out_box->y1 = best_y1;
     out_box->confidence = best;
-    out_box->valid = (*is_face_detected) && (best_x0 >= 0) && (best_y0 >= 0) && (best_x1 > best_x0) && (best_y1 > best_y0);
+    out_box->valid = *is_face_detected;
 
     if (best_keypoint.size() >= PRONE_LANDMARK_COUNT * 2) {
         for (int i = 0; i < PRONE_LANDMARK_COUNT * 2; ++i) {

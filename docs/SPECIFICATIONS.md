@@ -44,15 +44,22 @@
 
 ```json
 {
-  "face_detected": 1,
+  "wifi": "connected",
+  "camera": "ok",
+  "sdcard": "ok",
+  "inference": "ok",
+  "timestamp_ms": 123456,
+  "face_detected": true,
   "face_score": 0.82,
   "face_count": 1,
   "bbox": {
-    "x": 48,
-    "y": 36,
-    "w": 102,
-    "h": 118
-  }
+    "x0": 48,
+    "y0": 36,
+    "x1": 150,
+    "y1": 154,
+    "valid": true
+  },
+  "landmarks_valid": true
 }
 ```
 
