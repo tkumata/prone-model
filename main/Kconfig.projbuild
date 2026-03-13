@@ -1,0 +1,15 @@
+menu "Prone Collector Configuration"
+
+config WIFI_SSID
+    string "WiFi SSID"
+    default ""
+    help
+        STA 接続に使う SSID
+
+config WIFI_PASSWORD
+    string "WiFi Password"
+    default ""
+    help
+        STA 接続に使うパスフレーズ
+
+endmenu
