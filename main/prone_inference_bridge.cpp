@@ -14,7 +14,7 @@ static constexpr float DETECTOR_MSR_SCORE_TH = 0.30f;
 static constexpr float DETECTOR_MSR_NMS_TH = 0.45f;
 static constexpr float DETECTOR_MNP_SCORE_TH = 0.35f;
 static constexpr float DETECTOR_MNP_NMS_TH = 0.45f;
-static constexpr float FACE_DETECTED_SCORE_TH = 0.50f;
+static constexpr float FACE_DETECTED_SCORE_TH = 0.40f;
 
 static human_face_detect::MSRMNP *s_detector;
 static prone_inference_status_t s_status = PRONE_INFERENCE_STATUS_NOT_READY;
