@@ -2,13 +2,26 @@
   "configurations": [
     {
       "name": "ESP-IDF",
-      "compilerPath": "/Users/kumata/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc",
-      "compileCommands": "${config:idf.buildPath}/compile_commands.json",
+      "compilerPath": "/Users/kumata/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
       "includePath": [
+        "${workspaceFolder}/main",
+        "${workspaceFolder}/managed_components/**",
+        "${workspaceFolder}/build/config",
+        "${config:idf.currentSetup}/components/**",
         "${workspaceFolder}/**"
       ],
+      "defines": [
+        "ESP_PLATFORM",
+        "IDF_TARGET=esp32s3"
+      ],
+      "intelliSenseMode": "gcc-x64",
       "browse": {
         "path": [
+          "${workspaceFolder}/main",
+          "${workspaceFolder}/managed_components",
+          "${workspaceFolder}/build/config",
+          "${config:idf.currentSetup}/components",
           "${workspaceFolder}"
         ],
         "limitSymbolsToIncludedHeaders": true
