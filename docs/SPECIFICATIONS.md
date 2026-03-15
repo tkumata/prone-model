@@ -1,219 +1,478 @@
 # 仕様
 
-## 1. マイコン側仕様
+## 1. 概要
 
-### 1.1 動作モード
+本システムは `Freenove ESP32-S3 WROOM CAM` を用いて、うつ伏せ検知モデル学習用の画像データセットを収集する。
 
-- Wi-Fi は `STA` モードで起動する
-- 起動後にカメラ、SD カード、顔関連モデル、HTTP サーバを初期化する
-- Web 画面は同一ネットワーク内のブラウザからアクセスする
+単なる画像保存ではなく、以下を満たすことを仕様とする。
 
-### 1.2 HTTP エンドポイント
+- 被写体単位分割に必要なメタデータを必ず保存する
+- 曖昧サンプルを学習対象から外せる
+- 画像とメタデータの整合を維持できる
+- PC 上で `ESP-DL` 用モデル生成に進める
 
-- `GET /`
-  Web 画面を返す
-- `GET /stream`
-  映像ストリームを返す
-- `GET /api/status`
-  最新検出状態を JSON で返す
-- `POST /api/sample`
-  指定ラベルで1サンプル保存する
-- `GET /api/export`
-  CSV をダウンロードさせる
-- `POST /api/reset`
-  CSV を空にする
+## 2. ハードウェア仕様
 
-### 1.3 `POST /api/sample` の要求仕様
+- ボード: `Freenove ESP32-S3 WROOM CAM`
+- 保存先: microSD
+- 画像形式: JPEG
+- 初期フレームサイズ: `320 x 240`
+- `board_name` 保存値: `Freenove ESP32-S3 WROOM CAM`
 
-要求 JSON は以下とする。
+## 3. PC モデル生成前提仕様
 
-```json
-{
-  "label": 1,
-  "session_id": "20260313_a01"
-}
-```
+- モデル生成は PC 上で行う
+- 学習元は `Freenove ESP32-S3 WROOM CAM` で収集した JPEG と `metadata.csv` のみとする
+- 学習対象行は `is_usable_for_training=1` かつ `exclude_reason=""` に限定する
+- 入力画像は RGB 3 チャンネルへ変換する
+- 入力サイズは `96 x 96`
+- 出力は 2 クラス分類とし、添字 `0=non_prone`, `1=prone` で固定する
+- 学習/検証/評価分割は `subject_id` 単位で固定する
+- PC 側では `float` 学習済みモデル、`ONNX`、`ESP-DL` 形式モデルを順に生成可能でなければならない
+- 検証データで決めた判定閾値を `.espdl` 評価と実機評価で固定利用する
+- `float` モデル、量子化参照、実機結果は同一評価集合で比較可能でなければならない
 
-- `label` は `0` または `1` のみ許可する
-- `session_id` は空文字不可とする
-- 顔が複数検出されている場合は保存失敗とする
+## 4. 実機推論成立仕様
 
-### 1.4 `GET /api/status` の応答仕様
+- 推論対象は `Freenove ESP32-S3 WROOM CAM` のライブ入力とする
+- 実機入力前処理は PC 学習前処理と同一とする
+- 実機出力クラス順は `0=non_prone`, `1=prone`
+- 実機推論の受け入れ判定は評価データと別の実機確認用集合でも行う
+- 実機で使う閾値は検証データで一度だけ決め、評価集合と実機確認用集合では変更しない
+- 実機受け入れ時は PC 量子化参照とのクラス一致率を確認する
 
-応答 JSON は以下を含む。
+## 5. Wi-Fi 仕様
+
+- モード: `STA`
+- 接続先: 既存 AP
+- 認証情報保存先: `sdkconfig`
+
+使用設定値:
+
+- `CONFIG_WIFI_SSID`
+- `CONFIG_WIFI_PASSWORD`
+
+## 6. UI 仕様
+
+### 6.1 `GET /`
+
+返却: HTML
+
+必須 UI:
+
+- カメラストリーミング
+- 撮影ボタン
+- `うつ伏せ / 非うつ伏せ` ラジオボタン
+- エクスポートボタン
+- SD カードリセットボタン
+- `subject_id` 入力欄
+- `session_id` 入力欄
+- `location_id` 入力欄
+- `lighting_id` 入力欄
+- `camera_position_id` 入力欄
+- `annotator_id` 入力欄
+- 学習利用可否入力
+- 除外理由入力
+- `notes` 入力欄
+
+## 7. API 仕様
+
+### 7.1 `GET /stream`
+
+目的:
+
+- MJPEG ストリームを返す
+
+レスポンス:
+
+- `200 OK`
+- `Content-Type: multipart/x-mixed-replace;boundary=frame`
+
+### 7.2 `GET /api/status`
+
+目的:
+
+- 現在状態と集計を返す
+
+レスポンス例:
 
 ```json
 {
   "wifi": "connected",
   "camera": "ok",
   "sdcard": "ok",
-  "inference": "ok",
-  "timestamp_ms": 123456,
-  "face_detected": true,
-  "face_score": 0.82,
-  "face_count": 1,
-  "bbox": {
-    "x0": 48,
-    "y0": 36,
-    "x1": 150,
-    "y1": 154,
-    "valid": true
-  },
-  "landmarks_valid": true
+  "sample_count": 240,
+  "usable_count": 210,
+  "excluded_count": 30,
+  "last_capture_ms": 1710000000000
 }
 ```
 
-## 2. Web 画面仕様
+### 7.3 `POST /api/capture`
 
-- 映像プレビューを表示する
-- 顔枠を重ねて表示する
-- 現在の検出状態を表示する
-- `うつ伏せ保存` と `非うつ伏せ保存` の2ボタンを表示する
-- `CSV エクスポート` ボタンを表示する
-- `CSV リセット` ボタンを表示する
-- 保存成功、保存失敗、理由を表示する
+目的:
 
-## 3. CSV 仕様
+- 画像と必須メタデータを保存する
 
-### 3.1 保存先
+リクエスト:
 
-- 保存先は `/sdcard/prone_samples.csv` とする
-
-### 3.2 ヘッダ
-
-```csv
-timestamp,session_id,label,face_detected,face_score,face_count,bbox_x,bbox_y,bbox_w,bbox_h,left_eye_x,left_eye_y,left_eye_visible,right_eye_x,right_eye_y,right_eye_visible,nose_x,nose_y,nose_visible,left_mouth_x,left_mouth_y,left_mouth_visible,right_mouth_x,right_mouth_y,right_mouth_visible
+```json
+{
+  "subject_id": "baby_001",
+  "session_id": "baby_001_20260315_am",
+  "location_id": "loc_01",
+  "lighting_id": "light_day",
+  "camera_position_id": "campos_top",
+  "annotator_id": "ann_a01",
+  "label": 1,
+  "is_usable_for_training": 1,
+  "exclude_reason": "",
+  "notes": ""
+}
 ```
 
-### 3.3 列定義
+必須制約:
 
-- `timestamp`
-  保存時刻。ISO 形式または起動後ミリ秒
+- `subject_id` は必須
+- `session_id` は必須
+- `location_id` は必須
+- `lighting_id` は必須
+- `camera_position_id` は必須
+- `annotator_id` は必須
+- `label` は `0` または `1`
+- `is_usable_for_training` は `0` または `1`
+- `is_usable_for_training = 1` の場合、`exclude_reason` は空
+- `is_usable_for_training = 0` の場合、`exclude_reason` は必須
+
+成功レスポンス例:
+
+```json
+{
+  "saved": true,
+  "capture_id": "1710000000000",
+  "image_path": "images/1710000000000.jpg"
+}
+```
+
+### 7.4 `GET /api/export/manifest`
+
+目的:
+
+- エクスポート対象一覧をページ単位で返す
+
+クエリ:
+
+- `page`
+- `page_size`
+
+制約:
+
+- `page_size` の既定値は `50`
+- `page_size` の最大値は `100`
+
+レスポンス例:
+
+```json
+{
+  "total_samples": 240,
+  "page": 1,
+  "page_size": 50,
+  "has_next": true,
+  "items": [
+    {
+      "capture_id": "1710000000000",
+      "image_path": "images/1710000000000.jpg",
+      "timestamp_ms": 1710000000000,
+      "label": 1
+    }
+  ]
+}
+```
+
+### 7.5 `GET /api/export/metadata`
+
+目的:
+
+- `metadata.csv` を単独で返す
+
+レスポンス:
+
+- `200 OK`
+- `Content-Type: text/csv`
+
+### 7.6 `GET /api/export/image`
+
+目的:
+
+- 指定した 1 画像を返す
+
+クエリ:
+
+- `capture_id`
+
+レスポンス:
+
+- `200 OK`
+- `Content-Type: image/jpeg`
+
+失敗条件:
+
+- 該当画像なし: `404 Not Found`
+
+### 7.7 `POST /api/reset`
+
+目的:
+
+- データセット全体を削除する
+
+リクエスト:
+
+```json
+{
+  "confirm": "RESET"
+}
+```
+
+## 8. 保存仕様
+
+### 8.1 保存先
+
+- 画像: `dataset/images/<capture_id>.jpg`
+- メタデータ: `dataset/metadata.csv`
+
+### 8.2 `metadata.csv` 列
+
+以下を必須列とする。
+
+- `capture_id`
+- `timestamp_ms`
+- `subject_id`
 - `session_id`
-  人手が指定する収集単位識別子
+- `location_id`
+- `lighting_id`
+- `camera_position_id`
+- `annotator_id`
 - `label`
-  `1 = うつ伏せ` `0 = 非うつ伏せ`
-- `face_detected`
-  `1 = 顔検出あり` `0 = 顔検出なし`
-- `face_score`
-  顔検出信頼度
-- `face_count`
-  検出された顔数
-- `bbox_x` `bbox_y` `bbox_w` `bbox_h`
-  顔枠情報
-- 各座標列
-  顔枠基準で正規化した座標
-- 各 `visible` 列
-  特徴点の可視状態
+- `label_name`
+- `is_usable_for_training`
+- `exclude_reason`
+- `notes`
+- `image_path`
+- `image_bytes`
+- `frame_width`
+- `frame_height`
+- `pixel_format`
+- `jpeg_quality`
+- `board_name`
 
-### 3.4 欠損仕様
+### 8.3 列定義
 
-- `visible = 0` のとき座標には番兵値 `-1.0` を入れる
-- `face_detected = 0` のとき全特徴点を番兵値 `-1.0` とする
-- `face_detected = 0` のとき全 `visible` は `0` とする
+- `capture_id`
+  一意な撮影 ID
+- `timestamp_ms`
+  保存時刻
+- `subject_id`
+  被写体識別子
+- `session_id`
+  連続収集識別子
+- `location_id`
+  撮影場所識別子
+- `lighting_id`
+  照明条件識別子
+- `camera_position_id`
+  カメラ設置条件識別子
+- `annotator_id`
+  注釈担当者識別子
+- `label`
+  `1=prone`, `0=non_prone`
+- `label_name`
+  可読名
+- `is_usable_for_training`
+  学習利用可否
+- `exclude_reason`
+  学習除外理由
+- `notes`
+  自由記述メモ
+- `image_path`
+  相対画像パス
+- `image_bytes`
+  JPEG サイズ
+- `frame_width`
+  画像幅
+- `frame_height`
+  画像高
+- `pixel_format`
+  画像形式
+- `jpeg_quality`
+  JPEG 品質値
+- `board_name`
+  取得ハード。値は `Freenove ESP32-S3 WROOM CAM` 固定
 
-## 4. 正規化仕様
+## 9. 語彙仕様
 
-- `norm_x = (point_x - bbox_x) / bbox_w`
-- `norm_y = (point_y - bbox_y) / bbox_h`
-- `bbox_w <= 0` または `bbox_h <= 0` の場合は正規化せず、顔未検出扱いとする
-- 顔枠情報自体は画像サイズ基準で `0.0 - 1.0` に正規化して保存してよい
+### 9.1 `label_name`
 
-## 5. 保存可否仕様
+- `1 -> prone`
+- `0 -> non_prone`
 
-- `label` が `0/1` 以外なら保存しない
-- `session_id` が空なら保存しない
-- `face_count > 1` なら保存しない
-- SD カードが書き込み不可なら保存しない
-- 保存失敗時は HTTP エラーと理由を返す
+### 9.2 `exclude_reason`
 
-## 6. 学習データ構築仕様
+許可値:
 
-### 6.1 採用条件
+- `ambiguous_pose`
+- `face_not_visible`
+- `subject_missing`
+- `multiple_subjects`
+- `motion_blur`
+- `poor_lighting`
+- `annotation_error`
+- `other`
 
-- `face_detected = 1`
-- `face_count = 1`
-- `label` が有効
-- 必須列欠落なし
+## 10. 保存ロジック仕様
 
-### 6.2 除外条件
+保存成功条件:
 
-- 欠損だらけで特徴量が成立しない
-- 同一セッション内で不自然な重複がある
-- 収集メモ上で無効と判断したセッション
+1. 入力メタデータがすべて妥当
+2. JPEG 保存成功
+3. `metadata.csv` 追記成功
 
-## 7. データ分割仕様
+失敗時:
+
+- JPEG 保存失敗なら CSV を追記しない
+- CSV 追記失敗なら JPEG を削除する
+
+## 11. エクスポートロジック仕様
+
+- `metadata.csv` は 1 リクエストで返す
+- 画像一覧は `/api/export/manifest` でページ単位に返す
+- 画像本体は `/api/export/image?capture_id=...` で 1 件ずつ返す
+- サーバ側で巨大アーカイブを生成しない
+- 通信断後は未取得画像だけ再取得できる
+- 画像順序は `timestamp_ms` 昇順を基本とする
+- PC 側で `subject_id` 単位分割と学習前処理を再現できる列を欠落させない
+
+## 12. 分割仕様
+
+- 学習/検証/評価分割は `subject_id` 単位
+- `subject_id` 欠損サンプルは学習対象外
+- `is_usable_for_training=0` は学習対象外
+- `exclude_reason != ""` は監査対象として保持する
+- `board_name != "Freenove ESP32-S3 WROOM CAM"` は本モデル生成対象外
+- 閾値調整に使う集合と最終評価集合を分離する
+- 実機確認用集合は学習/検証/評価のいずれとも分離管理する
+
+## 13. PC 前処理仕様
+
+### 13.1 学習対象フィルタ
+
+- `label` は `0` または `1`
+- `is_usable_for_training=1`
+- `exclude_reason` は空文字
+- `subject_id` 欠損は除外
+- `image_path` 欠損は除外
+- `board_name` は `Freenove ESP32-S3 WROOM CAM`
+
+### 13.2 画像前処理
+
+- 読み込み元は JPEG
+- 色空間は RGB
+- 出力サイズは `96 x 96`
+- 画素値スケール方法は学習設定として保存し、量子化時も同一条件を使う
+- 前処理条件は評価結果と一緒に保存する
+- チャンネル順は `RGB`
+- 画素並び順はモデル入力定義と一致させる
+- 画像回転方向は収集ボードの実画像向きに合わせて固定する
+- 学習時と実機時で別の補間方法を使ってはならない
+
+### 13.3 学習利用可画像の最低条件
+
+- 被写体の体幹が視認できる
+- 被写体主要部位が画面外へ大きく欠けていない
+- 学習利用可画像では被写体短辺サイズが画像短辺の 30% 以上
+- 姿勢判定に必要な輪郭がブレや露光失敗で失われていない
+
+### 13.4 学習分割成果物
 
 - `train`
-- `valid`
+- `val`
 - `test`
 
-分割比率の初期値は以下とする。
+各成果物は少なくとも以下を持つ。
 
-- `train = 70%`
-- `valid = 15%`
-- `test = 15%`
+- `image_path`
+- `label`
+- `subject_id`
+- `session_id`
+- `board_name`
 
-ただし、分割は行単位ではなく `session_id` 単位で実施する。
+### 13.5 モデル成果物
 
-## 8. 学習仕様
+- 学習済み `float` モデル
+- `ONNX`
+- `ESP-DL` 形式モデル
+- 分割定義
+- 評価結果
+- 量子化設定
+- 生成元データ識別情報
+- 固定済み閾値
+- PC 量子化参照の推論結果
 
-### 8.1 入力次元
+### 13.6 モデル合格基準
 
-- `20` 次元
+- `float` モデルの評価集合における `prone` 再現率は `0.92` 以上
+- `float` モデルの評価集合における `prone` 適合率は `0.90` 以上
+- `float` モデルの評価集合における全体正解率は `0.90` 以上
+- 量子化後評価で全体正解率低下は `0.03` 以内
+- 量子化後評価で `prone` 再現率低下は `0.03` 以内
+- PC 量子化参照と `.espdl` 実機推論のクラス一致率は `0.98` 以上
 
-### 8.2 入力内容
+## 14. 実機検証仕様
 
-- 5点座標 `10`
-- 5点可視フラグ `5`
-- 顔枠 `4`
-- 顔検出信頼度 `1`
+### 14.1 入力
 
-### 8.3 初期モデル
+- `Freenove ESP32-S3 WROOM CAM` のライブフレーム
+- 実機確認用集合に含まれる画像または再現可能な姿勢シーン
 
-- 全結合 `20 -> 32 -> 16 -> 1`
-- 2値分類
-- 出力は `0.0 - 1.0` のスコア
+### 14.2 記録項目
 
-### 8.4 初期判定閾値
+- 推論時刻
+- 入力識別子
+- 予測クラス
+- `prone` スコア
+- 判定閾値
+- 正解ラベル
 
-- `0.50`
+### 14.3 実機合格基準
 
-## 9. 評価仕様
+- 連続 300 フレーム相当の試験で異常終了しない
+- 実機確認用集合で `prone` 再現率 `0.90` 以上
+- 実機確認用集合で `non_prone` 適合率 `0.90` 以上
+- PC 量子化参照との差分原因を説明できない不一致が 2% を超えない
 
-- `うつ伏せ` 再現率
-- `うつ伏せ` 適合率
-- 全体正解率
-- 混同行列
+## 15. エラー仕様
 
-採用条件の初期値は以下とする。
+- 必須項目欠損: `400 Bad Request`
+- 不正ラベル: `400 Bad Request`
+- 不正除外理由: `400 Bad Request`
+- 不正な `location_id`, `lighting_id`, `camera_position_id`, `annotator_id`: `400 Bad Request`
+- カメラ異常: `500` または `503`
+- SD カード異常: `500`
+- エクスポート対象画像なし: `404 Not Found`
+- 確認トークン不一致: `409 Conflict`
+- PC 側で必須列不足が見つかった場合はモデル生成を開始してはならない
+- PC 側で `subject_id` 重複跨ぎ分割が検出された場合はその分割を無効とする
+- `float` モデルが合格基準未達の場合は量子化工程へ進めない
+- 量子化後モデルが合格基準未達の場合は `.espdl` 実機受け入れへ進めない
+- 実機検証で合格基準未達の場合はモデル採用を禁止する
 
-- `うつ伏せ` 再現率 `0.90` 以上
-- `うつ伏せ` 適合率 `0.80` 以上
+## 16. 成立条件
 
-## 10. `.espdl` 変換仕様
+本仕様は、以下を満たすときに学習データ仕様として成立する。
 
-- 学習済みモデルを保存する
-- 保存したモデルを `.espdl` 形式へ変換する
-- 変換時は入力次元、前処理、出力順序を固定する
-- 変換後ファイル名は `prone_face_classifier.espdl` とする
-
-## 11. エラーコード仕様
-
-### 11.1 `POST /api/sample`
-
-- `200`
-  保存成功
-- `400`
-  ラベル不正、`session_id` 不正、複数顔
-- `500`
-  SD カード書き込み失敗、内部例外
-
-### 11.2 `POST /api/reset`
-
-- `200`
-  リセット成功
-- `409`
-  確認トークン不一致
-- `500`
-  ファイル操作失敗
+- `subject_id` 単位で分割できる
+- 曖昧サンプルを自動除外できる
+- 人手で画像監査できる
+- 画像とメタデータの対応が壊れない
+- 分割エクスポートを途中再試行しても全件取得できる
+- PC 上で同一前処理条件から `float` モデル、`ONNX`、`ESP-DL` 形式モデルを再生成できる
+- 実機確認用集合で `Freenove ESP32-S3 WROOM CAM` 上の `prone / non_prone` 検知が合格基準を満たす

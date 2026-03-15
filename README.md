@@ -1,125 +1,205 @@
 # prone-model
 
-乳幼児のうつ伏せ状態を、顔検出から得られる数値情報だけで判定するためのプロジェクトです。
-最終的には、PC 側で学習したモデルを `ESP-DL` で扱える `.espdl` 形式へ変換し、`Freenove ESP32-S3 WROOM CAM` 上で利用することを目標にしています。
+`Freenove ESP32-S3 WROOM CAM` を使い、乳幼児の `うつ伏せ / 非うつ伏せ` 学習用写真データを収集するための ESP-IDF プロジェクトです。
 
-現時点では、マイコン上でカメラ映像を取得し、顔検出と顔特徴点の抽出を行い、Web 画面からラベル付きで顔情報を CSV に収集できる段階まで進んでいます。
+既存 Wi-Fi AP に `STA` 接続し、ESP32 上で Web サーバを起動します。ブラウザからライブストリームを確認し、ラベルを選んで撮影し、SD カードへ保存します。保存済みデータは `metadata.csv` と画像単位で分割エクスポートでき、必要に応じて SD カード内データを全削除できます。
 
-## 目的
+## 現在のスコープ
 
-- 乳幼児のうつ伏せ状態を判定する軽量モデルを作る
-- 入力は画像そのものではなく、顔検出から得られる数値情報に限定する
-- 学習済みモデルを `.espdl` 形式へ変換し、マイコンで扱えるようにする
+- `Freenove ESP32-S3 WROOM CAM` でカメラ映像を取得する
+- `sdkconfig` に保存した `SSID` / `PASSWORD` で既存 AP に接続する
+- Web UI でストリーミング映像を表示する
+- Web UI で `うつ伏せ / 非うつ伏せ` を選択して撮影する
+- JPEG 画像と学習用メタデータを SD カードへ保存する
+- 保存済みデータを PC 側へ分割ダウンロードする
+- SD カード内のデータセットを初期化する
 
-## 現状できること
+## 現在の実装状態
 
-- `Freenove ESP32-S3 WROOM CAM` のカメラ映像を取得する
-- Wi-Fi `STA` モードで既存アクセスポイントへ接続する
-- `ESP-DL` の顔検出モデルを使って顔を検出する
-- 顔枠と顔特徴点を抽出する
-- ブラウザから映像ストリームを確認する
-- Web 画面から `うつ伏せ` / `非うつ伏せ` のラベルを付けて 1 サンプルずつ保存する
-- 保存済み CSV をエクスポートする
-- CSV をリセットする
+- 収集機能のみ実装済み
+- 推論機能は未実装
+- UI/API サーバは `80` 番ポート
+- MJPEG ストリームは `81` 番ポート
+- 初期フレームサイズは `320 x 240`
+- 保存形式は JPEG
+- `status` は初回表示時、撮影後、リセット後だけ更新する
 
-## 収集できる顔情報
+学習データ収集インターフェイス
 
-保存先は `/sdcard/prone_samples.csv` です。
+![学習データ収集インターフェイス](./docs/screenshot_001.png)
 
-CSV には、少なくとも以下の情報を保存します。
+## Web UI
 
-- `timestamp`
+ルート画面 `/` には以下を配置します。
+
+- カメラストリーミング
+- 撮影ボタン
+- `うつ伏せ / 非うつ伏せ` ラジオボタン
+- `エクスポート` ボタン
+- `SDカードリセット` ボタン
+- `subject_id` 入力欄
+- `session_id` 入力欄
+- `location_id` 入力欄
+- `lighting_id` 入力欄
+- `camera_position_id` 入力欄
+- `annotator_id` 入力欄
+- `学習利用可否` 入力欄
+- `除外理由` 入力欄
+- `notes` 入力欄
+
+### 現在のレイアウト
+
+- ストリーミング表示はスマホ操作を優先して小さめに表示する
+- `撮影` ボタンはストリーミング上部に配置する
+- `エクスポート` と `SDカードリセット` は入力欄の下に配置する
+
+## 保存形式
+
+SD カード上には `dataset/` ディレクトリを作成し、以下を保存します。
+
+- `dataset/images/*.jpg`
+  撮影した JPEG 画像
+- `dataset/metadata.csv`
+  全画像に対するメタデータ一覧
+
+### `metadata.csv` の基本列
+
+- `capture_id`
+- `timestamp_ms`
+- `subject_id`
 - `session_id`
+- `location_id`
+- `lighting_id`
+- `camera_position_id`
+- `annotator_id`
 - `label`
-- `face_detected`
-- `face_score`
-- `face_count`
-- `bbox_x`
-- `bbox_y`
-- `bbox_w`
-- `bbox_h`
-- `left_eye_x`
-- `left_eye_y`
-- `left_eye_visible`
-- `right_eye_x`
-- `right_eye_y`
-- `right_eye_visible`
-- `nose_x`
-- `nose_y`
-- `nose_visible`
-- `left_mouth_x`
-- `left_mouth_y`
-- `left_mouth_visible`
-- `right_mouth_x`
-- `right_mouth_y`
-- `right_mouth_visible`
+- `label_name`
+- `is_usable_for_training`
+- `exclude_reason`
+- `notes`
+- `image_path`
+- `image_bytes`
+- `frame_width`
+- `frame_height`
+- `pixel_format`
+- `jpeg_quality`
+- `board_name`
 
-顔特徴点は次の 5 点を扱います。
+## 学習データとして追加で残すべき情報
 
-- 左目
-- 右目
-- 鼻
-- 左口角
-- 右口角
+画像だけでは後で偏りや品質問題を潰しにくいので、以下を必須で残します。
 
-座標は顔枠 (バウンティボックス) 基準で正規化して保存します。顔が未検出の場合や特徴点が使えない場合は、番兵値 `-1.0` と可視フラグ `0` を保存します。
+- `subject_id`
+  被写体単位分割を行うための最重要キー
+- `session_id`
+  同一環境・同一時間帯・同一被写体群を識別する
+- `location_id`
+  撮影場所の偏りを監査する
+- `lighting_id`
+  照明条件の偏りを監査する
+- `camera_position_id`
+  画角と設置位置の偏りを監査する
+- `annotator_id`
+  注釈担当差分を監査する
+- `timestamp_ms`
+  時系列の偏り、連写由来のリーク確認に使う
+- `is_usable_for_training`
+  曖昧サンプルを学習集合から外す
+- `exclude_reason`
+  学習利用不可理由を保存する
+- `notes`
+  後から判断保留や注意点を監査する
+- `frame_width` / `frame_height`
+  前処理条件を再現する
+- `jpeg_quality`
+  圧縮率差異を追跡する
+- `board_name`
+  取得元ハードを識別する
+- `image_bytes`
+  異常に小さい破損画像や露光失敗を検知する
 
-## 画面と API
+## エクスポート
 
-マイコン起動後、同一ネットワーク内のブラウザからアクセスできます。
+エクスポートは巨大アーカイブを 1 回で返さず、以下に分割します。
+
+- `/api/export/metadata`
+  `metadata.csv` を取得する
+- `/api/export/manifest`
+  画像一覧をページ単位で取得する
+- `/api/export/image?capture_id=...`
+  画像を 1 件ずつ取得する
+
+通信断があっても、未取得画像だけ再試行できます。
+
+### 現在の UI 動作
+
+- `エクスポート` ボタンは `metadata.csv` を取得する
+- 続いて `manifest.json` を生成して取得する
+- 続いて各 JPEG を 1 件ずつ順次ダウンロードする
+- ブラウザ側で複数ダウンロード許可が必要な場合がある
+- 大量画像の一括取得はブラウザ依存のため、件数が多い場合は PC 側取得スクリプト化を前提に見直し余地がある
+
+## 設定
+
+Wi-Fi 認証情報は `sdkconfig` に保持します。
+
+- `CONFIG_WIFI_SSID`
+- `CONFIG_WIFI_PASSWORD`
+
+リポジトリへ実値をコミットしない前提です。
+
+## API
 
 - `GET /`
-  Web 画面
-- `GET /stream`
-  映像ストリーム
+  Web UI
+- `GET http://<device-ip>:81/stream`
+  MJPEG ストリーム
 - `GET /api/status`
-  最新の検出状態
-- `POST /api/sample`
-  ラベル付きで 1 サンプル保存
-- `GET /api/export`
-  CSV ダウンロード
+  状態取得
+- `POST /api/capture`
+  撮影と保存
+- `GET /api/export/manifest`
+  ページ単位の画像一覧
+- `GET /api/export/metadata`
+  `metadata.csv`
+- `GET /api/export/image?capture_id=...`
+  単一画像取得
 - `POST /api/reset`
-  CSV リセット
+  データセット初期化
 
-Web 画面では、映像プレビュー、顔枠表示、検出状態、`session_id` 入力、保存ボタン、CSV 操作を提供します。
+## ドキュメント方針
 
-## 動作環境
+本リポジトリでは、実装より先に学習データ仕様を閉じます。特に以下を絶対要件とします。
 
-- ボード: `Freenove ESP32-S3 WROOM CAM`
-- フレーム解像度: `320 x 240`
-- Wi-Fi: `STA` モード
-- 保存先: microSD
-- 推論基盤: `ESP-DL`
-- ビルド環境: `ESP-IDF`
+- `subject_id` 必須
+- 画像本体保存必須
+- `is_usable_for_training` と `exclude_reason` による曖昧サンプル除外
+- `subject_id` 単位分割
 
-Wi-Fi の `SSID` とパスフレーズは `menuconfig` から設定する前提です。
+## ビルド
 
-## 現時点の位置づけ
+```bash
+source ~/.espressif/v5.5.3/esp-idf/export.sh
+idf.py set-target esp32s3
+idf.py menuconfig
+idf.py build
+idf.py -p <PORT> flash monitor
+```
 
-このリポジトリは、最終的なうつ伏せ判定モデルの完成版ではありません。
-現在は、学習用データを安定して収集するための基盤を中心に実装しています。
+## 運用メモ
 
-現段階で到達している主な範囲は次のとおりです。
+- 同じ収集セッション中は `session_id`, `location_id`, `lighting_id`, `camera_position_id`, `annotator_id` を毎回変える必要はない
+- 毎回見直す主な入力は `label`, `is_usable_for_training`, `exclude_reason`, `notes`
+- `session_id` は被写体、時間帯、設置条件が変わったときに切り替える
 
-- 顔検出
-- 顔特徴点の取得
-- 顔情報の可視化
-- ラベル付き CSV 収集
+## ドキュメント
 
-未着手または今後の主対象は次のとおりです。
-
-- PC 側のデータ検証
-- 前処理
-- 学習
-- 評価
-- `.espdl` 変換
-- うつ伏せ判定モデルの組み込み
-
-## 参考ドキュメント
-
-詳細は `docs` 配下を参照してください。
-
-- `docs/REQUIREMENTS.md`
-- `docs/DESIGN.md`
-- `docs/SPECIFICATIONS.md`
-- `docs/TODO.md`
+- [docs/REQUIREMENTS.md](/Users/kumata/Developer/prone-model/docs/REQUIREMENTS.md)
+- [docs/DESIGN.md](/Users/kumata/Developer/prone-model/docs/DESIGN.md)
+- [docs/SPECIFICATIONS.md](/Users/kumata/Developer/prone-model/docs/SPECIFICATIONS.md)
+- [docs/COLLECTION_POLICY.md](/Users/kumata/Developer/prone-model/docs/COLLECTION_POLICY.md)
+- [docs/LABELING_GUIDELINES.md](/Users/kumata/Developer/prone-model/docs/LABELING_GUIDELINES.md)
+- [docs/DATA_QUALITY.md](/Users/kumata/Developer/prone-model/docs/DATA_QUALITY.md)
+- [docs/NAMING_RULES.md](/Users/kumata/Developer/prone-model/docs/NAMING_RULES.md)
+- [docs/ACCEPTANCE_CRITERIA.md](/Users/kumata/Developer/prone-model/docs/ACCEPTANCE_CRITERIA.md)
+- [docs/TODO.md](/Users/kumata/Developer/prone-model/docs/TODO.md)

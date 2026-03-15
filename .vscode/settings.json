@@ -1,10 +1,15 @@
 {
   "idf.currentSetup": "/Users/kumata/.espressif/v5.5.3/esp-idf",
-  "idf.openOcdConfigs": ["board/esp32s3-builtin.cfg"],
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ],
   "idf.port": "/dev/tty.usbmodem5AB90112901",
+  "idf.buildPath": "${workspaceFolder}/build",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3"
   },
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
   "clangd.path": "/Users/kumata/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin/clangd",
   "clangd.arguments": [
     "--background-index",
