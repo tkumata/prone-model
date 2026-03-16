@@ -186,6 +186,43 @@ idf.py build
 idf.py -p <PORT> flash monitor
 ```
 
+## PC でのモデル生成
+
+Mac 上では `python3` を使って PC 側パイプラインを実行します。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+prone-pc-pipeline --dataset-root /path/to/exported/dataset
+```
+
+主な既定値:
+
+- 入力サイズ: `96 x 96`
+- 分割比率: `train=0.70`, `val=0.15`, `test=0.15`
+- 乱数シード: `42`
+- 学習条件: `epoch=20`, `batch_size=32`, `learning_rate=0.001`
+- 初期判定閾値: `0.50`
+
+成果物は `artifacts/pc_pipeline/<run_name>/` に保存します。
+
+- `config.json`
+- `dataset_audit.json`
+- `splits/train.csv`, `splits/val.csv`, `splits/test.csv`
+- `checkpoints/best_model.pt`
+- `onnx/model.onnx`
+- `reports/metrics.json`
+- `reports/threshold.json`
+
+`ESP-DL` 変換コマンドが手元にある場合は、`{onnx_path}` と `{espdl_path}` を含む形で渡します。
+
+```bash
+prone-pc-pipeline \
+  --dataset-root /path/to/exported/dataset \
+  --espdl-converter-command "espdl_convert --input {onnx_path} --output {espdl_path}"
+```
+
 ## 運用メモ
 
 - 同じ収集セッション中は `session_id`, `location_id`, `lighting_id`, `camera_position_id`, `annotator_id` を毎回変える必要はない

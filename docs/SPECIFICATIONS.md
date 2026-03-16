@@ -28,9 +28,41 @@
 - 入力サイズは `96 x 96`
 - 出力は 2 クラス分類とし、添字 `0=non_prone`, `1=prone` で固定する
 - 学習/検証/評価分割は `subject_id` 単位で固定する
+- 分割比率既定値は `train=0.70`, `val=0.15`, `test=0.15`
+- 分割乱数シード既定値は `42`
+- 初期学習条件は `epoch=20`, `batch_size=32`, `learning_rate=0.001`
+- 初期判定閾値は `0.50`
 - PC 側では `float` 学習済みモデル、`ONNX`、`ESP-DL` 形式モデルを順に生成可能でなければならない
 - 検証データで決めた判定閾値を `.espdl` 評価と実機評価で固定利用する
 - `float` モデル、量子化参照、実機結果は同一評価集合で比較可能でなければならない
+
+### 3.1 PC 実行環境仕様
+
+- 想定 OS は `macOS`
+- 想定実行系は `python3`
+- 必須依存は `torch`, `torchvision`, `pillow`, `onnx`
+- 依存不足時は不足パッケージ一覧を表示して終了する
+
+### 3.2 PC 成果物仕様
+
+- 実行ごとに `artifacts/pc_pipeline/<run_name>/` を作成する
+- `config.json` に入力引数、前処理条件、分割条件、出力順、閾値を保存する
+- `dataset_audit.json` に監査結果を保存する
+- `splits/train.csv`, `splits/val.csv`, `splits/test.csv` を保存する
+- `checkpoints/best_model.pt` に最良 `float` モデルを保存する
+- `onnx/model.onnx` に `ONNX` を保存する
+- `reports/metrics.json` に各分割の指標を保存する
+- `reports/threshold.json` に固定閾値を保存する
+- `espdl/model.espdl` は変換コマンド成功時のみ保存する
+
+### 3.3 PC エラー仕様
+
+- `metadata.csv` 不在時は即座に終了する
+- 学習対象行が 0 件なら即座に終了する
+- 学習対象 `subject_id` が 3 件未満なら即座に終了する
+- 分割結果で `val` または `test` が 0 件なら即座に終了する
+- 画像欠損または破損が 1 件でもあれば `dataset_audit.json` に記録し、既定では終了する
+- `ESP-DL` 変換コマンド未指定時は `float` モデルと `ONNX` 出力後に正常終了できる
 
 ## 4. 実機推論成立仕様
 
