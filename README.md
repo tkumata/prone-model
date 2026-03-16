@@ -148,6 +148,32 @@ Wi-Fi 認証情報は `sdkconfig` に保持します。
 
 リポジトリへ実値をコミットしない前提です。
 
+## 管理外ファイルと生成手順
+
+このリポジトリで、管理外のまま運用する前提のファイルやディレクトリのうち、利用者がコマンド実行で生成するものは以下です。
+手動で新規作成しないと進めない必須ファイルはありません。
+
+- `sdkconfig`
+  - 用途: `CONFIG_WIFI_SSID`, `CONFIG_WIFI_PASSWORD` などのローカル設定を保持する
+  - 生成方法: `idf.py menuconfig` を実行すると生成または更新される
+  - 補足: Wi-Fi 認証情報はここで設定し、`vi` などでの手動新規作成は不要
+- `.venv/`
+  - 用途: PC 側パイプライン実行用の Python 仮想環境
+  - 生成方法: `python3 -m venv .venv`
+  - 補足: 生成後に `source .venv/bin/activate` と `pip install -e .` を実行する
+- `artifacts/pc_pipeline/<run_name>/`
+  - 用途: PC 側パイプラインの成果物出力先
+  - 生成方法: `python3 -m pc_pipeline --dataset-root /path/to/exported/dataset` を実行すると自動生成される
+  - 補足: 事前に `mkdir` や手動作成は不要
+- `managed_components/`
+  - 用途: `ESP-IDF` のコンポーネント管理で取得された依存物を保持する
+  - 生成方法: 初回の `idf.py build` などで必要に応じて自動生成される
+  - 補足: 手動作成は不要
+- `build/`
+  - 用途: `ESP-IDF` ビルド生成物を保持する
+  - 生成方法: `idf.py build` を実行すると自動生成される
+  - 補足: 手動作成は不要
+
 ## API
 
 - `GET /`
