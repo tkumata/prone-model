@@ -189,11 +189,19 @@ idf.py -p <PORT> flash monitor
 ## PC でのモデル生成
 
 Mac 上では `python3` を使って PC 側パイプラインを実行します。
+最も確実な実行方法は `python3 -m pc_pipeline` です。
+`prone-pc-pipeline` は `pip install -e .` 実行後に使えるようになる別名コマンドです。
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+python3 -m pc_pipeline --dataset-root /path/to/exported/dataset
+```
+
+`pip install -e .` の後は、次の別名コマンドでも実行できます。
+
+```bash
 prone-pc-pipeline --dataset-root /path/to/exported/dataset
 ```
 
@@ -218,7 +226,7 @@ prone-pc-pipeline --dataset-root /path/to/exported/dataset
 `ESP-DL` 変換コマンドが手元にある場合は、`{onnx_path}` と `{espdl_path}` を含む形で渡します。
 
 ```bash
-prone-pc-pipeline \
+python3 -m pc_pipeline \
   --dataset-root /path/to/exported/dataset \
   --espdl-converter-command "espdl_convert --input {onnx_path} --output {espdl_path}"
 ```
