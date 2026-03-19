@@ -97,13 +97,14 @@ static esp_err_t csv_write_escaped_field(FILE *file, const char *value)
 }
 
 static esp_err_t append_metadata_line_locked(const capture_request_t *request,
+                                             const storage_context_t *context,
                                              const camera_fb_t *fb,
                                              int64_t timestamp_ms,
                                              const char *capture_id,
                                              const char *image_path,
                                              storage_status_update_fn update_status)
 {
-    FILE *file = fopen(METADATA_PATH, "a");
+    FILE *file = fopen(context->metadata_path, "a");
 
     if (file == NULL) {
         return ESP_FAIL;
@@ -133,7 +134,7 @@ static esp_err_t append_metadata_line_locked(const capture_request_t *request,
         fprintf(file, ",%u,%u,%u,", (unsigned int) fb->len, (unsigned int) fb->width, (unsigned int) fb->height) < 0 ||
         csv_write_escaped_field(file, pixel_format_name(fb->format)) != ESP_OK ||
         fprintf(file, ",%d,", CAMERA_JPEG_QUALITY) < 0 ||
-        csv_write_escaped_field(file, BOARD_NAME) != ESP_OK ||
+        csv_write_escaped_field(file, context->board_name) != ESP_OK ||
         fputc('\n', file) == EOF ||
         fflush(file) != 0) {
         fclose(file);
@@ -201,23 +202,26 @@ bool storage_csv_read_field(char **cursor, char *out, size_t out_len)
     return true;
 }
 
-esp_err_t storage_ensure_ready(void)
+esp_err_t storage_ensure_ready(const storage_context_t *context)
 {
-    if (ensure_dir(DATASET_DIR) != ESP_OK || ensure_dir(IMAGES_DIR) != ESP_OK ||
-        ensure_metadata_file(METADATA_PATH) != ESP_OK) {
+    if (context == NULL || ensure_dir(context->dataset_dir) != ESP_OK ||
+        ensure_dir(context->images_dir) != ESP_OK ||
+        ensure_metadata_file(context->metadata_path) != ESP_OK) {
         return ESP_FAIL;
     }
     return ESP_OK;
 }
 
-void storage_refresh_dataset_counts(const char *metadata_path, collector_status_t *status)
+void storage_refresh_dataset_counts(const storage_context_t *context, collector_status_t *status)
 {
-    FILE *file = fopen(metadata_path, "r");
+    FILE *file;
     char line[MAX_CSV_LINE_LEN];
 
-    if (status == NULL) {
+    if (status == NULL || context == NULL) {
         return;
     }
+
+    file = fopen(context->metadata_path, "r");
 
     status->sample_count = 0;
     status->usable_count = 0;
@@ -268,12 +272,17 @@ void storage_refresh_dataset_counts(const char *metadata_path, collector_status_
     fclose(file);
 }
 
-int64_t storage_find_latest_capture_id(const char *metadata_path)
+int64_t storage_find_latest_capture_id(const storage_context_t *context)
 {
-    FILE *file = fopen(metadata_path, "r");
+    FILE *file;
     char line[MAX_CSV_LINE_LEN];
     int64_t latest_capture_id = 0;
 
+    if (context == NULL) {
+        return 0;
+    }
+
+    file = fopen(context->metadata_path, "r");
     if (file == NULL) {
         return 0;
     }
@@ -302,7 +311,8 @@ int64_t storage_find_latest_capture_id(const char *metadata_path)
     return latest_capture_id;
 }
 
-esp_err_t storage_save_capture_locked(const capture_request_t *request,
+esp_err_t storage_save_capture_locked(const storage_context_t *context,
+                                      const capture_request_t *request,
                                       bool camera_ready,
                                       SemaphoreHandle_t camera_mutex,
                                       storage_status_update_fn update_status,
@@ -316,12 +326,12 @@ esp_err_t storage_save_capture_locked(const capture_request_t *request,
     FILE *image_file = NULL;
     esp_err_t result = ESP_FAIL;
 
-    if (!camera_ready) {
+    if (context == NULL || !camera_ready) {
         return ESP_ERR_INVALID_STATE;
     }
 
     snprintf(image_path, image_path_len, "images/%s.jpg", capture_id);
-    snprintf(image_abs_path, sizeof(image_abs_path), "%s/%s", DATASET_DIR, image_path);
+    snprintf(image_abs_path, sizeof(image_abs_path), "%s/%s", context->dataset_dir, image_path);
 
     if (xSemaphoreTake(camera_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
         ESP_LOGE(TAG, "カメラ利用が混雑しています");
@@ -347,7 +357,7 @@ esp_err_t storage_save_capture_locked(const capture_request_t *request,
     fclose(image_file);
     image_file = NULL;
 
-    if (append_metadata_line_locked(request, fb, timestamp_ms, capture_id, image_path, update_status) != ESP_OK) {
+    if (append_metadata_line_locked(request, context, fb, timestamp_ms, capture_id, image_path, update_status) != ESP_OK) {
         unlink(image_abs_path);
         ESP_LOGE(TAG, "metadata.csv 追記に失敗しました");
         goto cleanup;
