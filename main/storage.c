@@ -11,7 +11,6 @@
 
 #include "esp_camera.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 
 #include "storage.h"
 
@@ -146,24 +145,6 @@ static esp_err_t append_metadata_line_locked(const capture_request_t *request,
         update_status(request->is_usable_for_training, timestamp_ms);
     }
     return ESP_OK;
-}
-
-static void generate_capture_id_locked(int64_t *last_capture_id,
-                                       char *capture_id,
-                                       size_t capture_id_len,
-                                       int64_t *timestamp_ms_out)
-{
-    int64_t capture_id_value = esp_timer_get_time();
-
-    if (capture_id_value <= *last_capture_id) {
-        capture_id_value = *last_capture_id + 1;
-    }
-    *last_capture_id = capture_id_value;
-
-    snprintf(capture_id, capture_id_len, "%lld", (long long) capture_id_value);
-    if (timestamp_ms_out != NULL) {
-        *timestamp_ms_out = capture_id_value / 1000LL;
-    }
 }
 
 bool storage_csv_read_field(char **cursor, char *out, size_t out_len)
@@ -324,14 +305,12 @@ int64_t storage_find_latest_capture_id(const char *metadata_path)
 esp_err_t storage_save_capture_locked(const capture_request_t *request,
                                       bool camera_ready,
                                       SemaphoreHandle_t camera_mutex,
-                                      int64_t *last_capture_id,
                                       storage_status_update_fn update_status,
-                                      char *capture_id,
-                                      size_t capture_id_len,
+                                      int64_t timestamp_ms,
+                                      const char *capture_id,
                                       char *image_path,
                                       size_t image_path_len)
 {
-    int64_t timestamp_ms;
     char image_abs_path[MAX_FILE_PATH_LEN];
     camera_fb_t *fb = NULL;
     FILE *image_file = NULL;
@@ -341,7 +320,6 @@ esp_err_t storage_save_capture_locked(const capture_request_t *request,
         return ESP_ERR_INVALID_STATE;
     }
 
-    generate_capture_id_locked(last_capture_id, capture_id, capture_id_len, &timestamp_ms);
     snprintf(image_path, image_path_len, "images/%s.jpg", capture_id);
     snprintf(image_abs_path, sizeof(image_abs_path), "%s/%s", DATASET_DIR, image_path);
 

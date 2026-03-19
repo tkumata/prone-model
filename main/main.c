@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -63,19 +64,25 @@
 static const char *TAG = "prone_collector";
 
 typedef struct {
+    bool camera_ready;
+    bool sdcard_ready;
+    bool metadata_ready;
+    bool wifi_connected;
+    bool storage_resetting;
+    int64_t last_capture_id;
+} app_runtime_t;
+
+typedef struct {
     httpd_handle_t server;
     httpd_handle_t stream_server;
     EventGroupHandle_t wifi_event_group;
     SemaphoreHandle_t storage_mutex;
     SemaphoreHandle_t camera_mutex;
     SemaphoreHandle_t status_mutex;
-    bool camera_ready;
-    bool sdcard_ready;
-    bool metadata_ready;
-    bool wifi_connected;
+    SemaphoreHandle_t runtime_mutex;
     collector_status_t status;
+    app_runtime_t runtime;
     sdmmc_card_t *sdcard;
-    int64_t last_capture_id;
 } app_state_t;
 
 static app_state_t g_state = {
@@ -85,10 +92,7 @@ static app_state_t g_state = {
     .storage_mutex = NULL,
     .camera_mutex = NULL,
     .status_mutex = NULL,
-    .camera_ready = false,
-    .sdcard_ready = false,
-    .metadata_ready = false,
-    .wifi_connected = false,
+    .runtime_mutex = NULL,
     .status = {
         .wifi = "disconnected",
         .camera = "error",
@@ -98,8 +102,15 @@ static app_state_t g_state = {
         .excluded_count = 0,
         .last_capture_ms = 0,
     },
+    .runtime = {
+        .camera_ready = false,
+        .sdcard_ready = false,
+        .metadata_ready = false,
+        .wifi_connected = false,
+        .storage_resetting = false,
+        .last_capture_id = 0,
+    },
     .sdcard = NULL,
-    .last_capture_id = 0,
 };
 
 static esp_err_t start_web_server(void);
@@ -108,6 +119,13 @@ static esp_err_t ensure_storage_ready(void);
 static void refresh_dataset_counts_locked(void);
 static void update_capture_status_locked(int is_usable_for_training, int64_t timestamp_ms);
 static void copy_status_snapshot(collector_status_t *out_status);
+static void copy_runtime_snapshot(app_runtime_t *out_runtime);
+static void set_camera_ready(bool ready);
+static void set_storage_ready(bool sdcard_ready, bool metadata_ready);
+static void set_wifi_connected(bool connected);
+static void set_storage_resetting(bool resetting);
+static void set_last_capture_id(int64_t capture_id);
+static void generate_capture_id(char *capture_id, size_t capture_id_len, int64_t *timestamp_ms_out);
 
 static const char *HTTP_STATUS_400 = "400 Bad Request";
 static const char *HTTP_STATUS_404 = "404 Not Found";
@@ -148,6 +166,20 @@ static void unlock_status(void)
     }
 }
 
+static void lock_runtime(void)
+{
+    if (g_state.runtime_mutex != NULL) {
+        xSemaphoreTake(g_state.runtime_mutex, portMAX_DELAY);
+    }
+}
+
+static void unlock_runtime(void)
+{
+    if (g_state.runtime_mutex != NULL) {
+        xSemaphoreGive(g_state.runtime_mutex);
+    }
+}
+
 static void update_capture_status_locked(int is_usable_for_training, int64_t timestamp_ms)
 {
     lock_status();
@@ -170,6 +202,70 @@ static void copy_status_snapshot(collector_status_t *out_status)
     lock_status();
     *out_status = g_state.status;
     unlock_status();
+}
+
+static void copy_runtime_snapshot(app_runtime_t *out_runtime)
+{
+    if (out_runtime == NULL) {
+        return;
+    }
+
+    lock_runtime();
+    *out_runtime = g_state.runtime;
+    unlock_runtime();
+}
+
+static void set_camera_ready(bool ready)
+{
+    lock_runtime();
+    g_state.runtime.camera_ready = ready;
+    unlock_runtime();
+}
+
+static void set_storage_ready(bool sdcard_ready, bool metadata_ready)
+{
+    lock_runtime();
+    g_state.runtime.sdcard_ready = sdcard_ready;
+    g_state.runtime.metadata_ready = metadata_ready;
+    unlock_runtime();
+}
+
+static void set_wifi_connected(bool connected)
+{
+    lock_runtime();
+    g_state.runtime.wifi_connected = connected;
+    unlock_runtime();
+}
+
+static void set_storage_resetting(bool resetting)
+{
+    lock_runtime();
+    g_state.runtime.storage_resetting = resetting;
+    unlock_runtime();
+}
+
+static void set_last_capture_id(int64_t capture_id)
+{
+    lock_runtime();
+    g_state.runtime.last_capture_id = capture_id;
+    unlock_runtime();
+}
+
+static void generate_capture_id(char *capture_id, size_t capture_id_len, int64_t *timestamp_ms_out)
+{
+    int64_t capture_id_value = esp_timer_get_time();
+
+    lock_runtime();
+    if (capture_id_value <= g_state.runtime.last_capture_id) {
+        capture_id_value = g_state.runtime.last_capture_id + 1;
+    }
+    g_state.runtime.last_capture_id = capture_id_value;
+    unlock_runtime();
+
+    snprintf(capture_id, capture_id_len, "%lld", (long long) capture_id_value);
+    if (timestamp_ms_out != NULL) {
+        *timestamp_ms_out = capture_id_value / 1000LL;
+    }
 }
 
 static esp_err_t send_json_error(httpd_req_t *req, httpd_err_code_t status, const char *message)
@@ -303,7 +399,7 @@ static esp_err_t ensure_storage_ready(void)
         lock_status();
         set_status_text(g_state.status.sdcard, sizeof(g_state.status.sdcard), "error");
         unlock_status();
-        g_state.sdcard_ready = false;
+        set_storage_ready(false, false);
         return err;
     }
 
@@ -312,20 +408,16 @@ static esp_err_t ensure_storage_ready(void)
         lock_status();
         set_status_text(g_state.status.sdcard, sizeof(g_state.status.sdcard), "error");
         unlock_status();
-        g_state.sdcard_ready = false;
+        set_storage_ready(false, false);
         return ESP_FAIL;
     }
 
-    g_state.sdcard_ready = true;
-    g_state.metadata_ready = true;
+    set_storage_ready(true, true);
     lock_status();
     set_status_text(g_state.status.sdcard, sizeof(g_state.status.sdcard), "ok");
     unlock_status();
 
-    if (xSemaphoreTake(g_state.storage_mutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
-        refresh_dataset_counts_locked();
-        xSemaphoreGive(g_state.storage_mutex);
-    }
+    refresh_dataset_counts_locked();
 
     return ESP_OK;
 }
@@ -344,8 +436,9 @@ static void refresh_dataset_counts_locked(void)
     g_state.status.usable_count = status_snapshot.usable_count;
     g_state.status.excluded_count = status_snapshot.excluded_count;
     g_state.status.last_capture_ms = status_snapshot.last_capture_ms;
-    g_state.last_capture_id = latest_capture_id;
     unlock_status();
+
+    set_last_capture_id(latest_capture_id);
 }
 
 static esp_err_t init_camera(void)
@@ -380,7 +473,7 @@ static esp_err_t init_camera(void)
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "カメラ初期化に失敗しました: %s", esp_err_to_name(err));
-        g_state.camera_ready = false;
+        set_camera_ready(false);
         lock_status();
         set_status_text(g_state.status.camera, sizeof(g_state.status.camera), "error");
         unlock_status();
@@ -393,7 +486,7 @@ static esp_err_t init_camera(void)
         sensor->set_quality(sensor, CAMERA_JPEG_QUALITY);
     }
 
-    g_state.camera_ready = true;
+    set_camera_ready(true);
     lock_status();
     set_status_text(g_state.status.camera, sizeof(g_state.status.camera), "ok");
     unlock_status();
@@ -411,7 +504,7 @@ static void wifi_event_handler(void *arg,
     }
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        g_state.wifi_connected = false;
+        set_wifi_connected(false);
         lock_status();
         set_status_text(g_state.status.wifi, sizeof(g_state.status.wifi), "disconnected");
         unlock_status();
@@ -422,7 +515,7 @@ static void wifi_event_handler(void *arg,
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
-        g_state.wifi_connected = true;
+        set_wifi_connected(true);
         lock_status();
         set_status_text(g_state.status.wifi, sizeof(g_state.status.wifi), "connected");
         unlock_status();
@@ -699,6 +792,7 @@ static esp_err_t status_handler(httpd_req_t *req)
 
 static esp_err_t capture_handler(httpd_req_t *req)
 {
+    app_runtime_t runtime_snapshot;
     cJSON *root = NULL;
     capture_request_t request = {0};
     char reason[128];
@@ -707,12 +801,17 @@ static esp_err_t capture_handler(httpd_req_t *req)
     cJSON *response = NULL;
     char *body = NULL;
     esp_err_t err;
+    int64_t timestamp_ms;
 
-    if (!g_state.camera_ready) {
+    copy_runtime_snapshot(&runtime_snapshot);
+    if (!runtime_snapshot.camera_ready) {
         return send_json_error_with_status(req, HTTP_STATUS_503, "カメラ異常のため撮影できません");
     }
-    if (!g_state.sdcard_ready || !g_state.metadata_ready) {
+    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
         return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD カード異常のため保存できません");
+    }
+    if (runtime_snapshot.storage_resetting) {
+        return send_json_error_with_status(req, HTTP_STATUS_503, "リセット処理中のため保存できません");
     }
 
     err = parse_request_json(req, &root);
@@ -744,13 +843,13 @@ static esp_err_t capture_handler(httpd_req_t *req)
         return send_json_error_with_status(req, HTTP_STATUS_503, "保存処理が混雑しています");
     }
 
+    generate_capture_id(capture_id, sizeof(capture_id), &timestamp_ms);
     err = storage_save_capture_locked(&request,
-                                      g_state.camera_ready,
+                                      runtime_snapshot.camera_ready,
                                       g_state.camera_mutex,
-                                      &g_state.last_capture_id,
                                       update_capture_status_locked,
+                                      timestamp_ms,
                                       capture_id,
-                                      sizeof(capture_id),
                                       image_path,
                                       sizeof(image_path));
     xSemaphoreGive(g_state.storage_mutex);
@@ -779,16 +878,31 @@ static esp_err_t capture_handler(httpd_req_t *req)
 
 static esp_err_t metadata_handler(httpd_req_t *req)
 {
-    if (!g_state.sdcard_ready || !g_state.metadata_ready) {
+    app_runtime_t runtime_snapshot;
+
+    copy_runtime_snapshot(&runtime_snapshot);
+    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard error");
+    }
+    if (runtime_snapshot.storage_resetting) {
+        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
     }
     return send_file(req, METADATA_PATH, "text/csv");
 }
 
 static esp_err_t image_handler(httpd_req_t *req)
 {
+    app_runtime_t runtime_snapshot;
     char capture_id[MAX_CAPTURE_ID_LEN];
     char path[128];
+
+    copy_runtime_snapshot(&runtime_snapshot);
+    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard error");
+    }
+    if (runtime_snapshot.storage_resetting) {
+        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
+    }
 
     if (httpd_req_get_url_query_len(req) <= 0 ||
         httpd_req_get_url_query_str(req, path, sizeof(path)) != ESP_OK ||
@@ -803,6 +917,7 @@ static esp_err_t image_handler(httpd_req_t *req)
 
 static esp_err_t manifest_handler(httpd_req_t *req)
 {
+    app_runtime_t runtime_snapshot;
     char query[128];
     char page_buf[16];
     char page_size_buf[16];
@@ -823,6 +938,18 @@ static esp_err_t manifest_handler(httpd_req_t *req)
         cJSON_Delete(root);
         cJSON_Delete(items);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
+    copy_runtime_snapshot(&runtime_snapshot);
+    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "metadata error");
+    }
+    if (runtime_snapshot.storage_resetting) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
     }
 
     if (httpd_req_get_url_query_len(req) > 0 &&
@@ -848,15 +975,8 @@ static esp_err_t manifest_handler(httpd_req_t *req)
     start_index = (page - 1) * page_size;
     end_index = start_index + page_size;
 
-    if (xSemaphoreTake(g_state.storage_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-        cJSON_Delete(root);
-        cJSON_Delete(items);
-        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
-    }
-
     file = fopen(METADATA_PATH, "r");
     if (file == NULL) {
-        xSemaphoreGive(g_state.storage_mutex);
         cJSON_Delete(root);
         cJSON_Delete(items);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "metadata error");
@@ -875,7 +995,6 @@ static esp_err_t manifest_handler(httpd_req_t *req)
 
             if (item == NULL) {
                 fclose(file);
-                xSemaphoreGive(g_state.storage_mutex);
                 cJSON_Delete(root);
                 cJSON_Delete(items);
                 return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
@@ -910,7 +1029,6 @@ static esp_err_t manifest_handler(httpd_req_t *req)
     cJSON_AddItemToObject(root, "items", items);
     body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
-    xSemaphoreGive(g_state.storage_mutex);
 
     if (body == NULL) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
@@ -924,6 +1042,7 @@ static esp_err_t manifest_handler(httpd_req_t *req)
 
 static esp_err_t reset_handler(httpd_req_t *req)
 {
+    app_runtime_t runtime_snapshot;
     cJSON *root = NULL;
     char confirm[16];
     DIR *dir;
@@ -932,8 +1051,12 @@ static esp_err_t reset_handler(httpd_req_t *req)
     char *body = NULL;
     esp_err_t err;
 
-    if (!g_state.sdcard_ready || !g_state.metadata_ready) {
+    copy_runtime_snapshot(&runtime_snapshot);
+    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
         return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD カード異常のためリセットできません");
+    }
+    if (runtime_snapshot.storage_resetting) {
+        return send_json_error_with_status(req, HTTP_STATUS_503, "リセット処理が混雑しています");
     }
 
     err = parse_request_json(req, &root);
@@ -946,7 +1069,9 @@ static esp_err_t reset_handler(httpd_req_t *req)
     }
     cJSON_Delete(root);
 
+    set_storage_resetting(true);
     if (xSemaphoreTake(g_state.storage_mutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        set_storage_resetting(false);
         return send_json_error_with_status(req, HTTP_STATUS_503, "リセット処理が混雑しています");
     }
 
@@ -966,9 +1091,19 @@ static esp_err_t reset_handler(httpd_req_t *req)
     unlink(METADATA_PATH);
     err = storage_ensure_ready();
     if (err == ESP_OK) {
-        refresh_dataset_counts_locked();
+        lock_status();
+        g_state.status.sample_count = 0;
+        g_state.status.usable_count = 0;
+        g_state.status.excluded_count = 0;
+        g_state.status.last_capture_ms = 0;
+        unlock_status();
+        set_last_capture_id(0);
+        set_storage_ready(true, true);
+    } else {
+        set_storage_ready(false, false);
     }
     xSemaphoreGive(g_state.storage_mutex);
+    set_storage_resetting(false);
 
     if (err != ESP_OK) {
         return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, "CSV の再生成に失敗しました");
@@ -993,11 +1128,13 @@ static esp_err_t reset_handler(httpd_req_t *req)
 
 static esp_err_t stream_handler(httpd_req_t *req)
 {
+    app_runtime_t runtime_snapshot;
     char part_buf[64];
     camera_fb_t *fb = NULL;
     esp_err_t err = ESP_OK;
 
-    if (!g_state.camera_ready) {
+    copy_runtime_snapshot(&runtime_snapshot);
+    if (!runtime_snapshot.camera_ready) {
         return send_text_error_with_status(req, HTTP_STATUS_503, "camera error");
     }
 
@@ -1120,8 +1257,10 @@ static void collector_main_task(void *arg)
     g_state.storage_mutex = xSemaphoreCreateMutex();
     g_state.camera_mutex = xSemaphoreCreateMutex();
     g_state.status_mutex = xSemaphoreCreateMutex();
+    g_state.runtime_mutex = xSemaphoreCreateMutex();
     if (g_state.wifi_event_group == NULL || g_state.storage_mutex == NULL ||
-        g_state.camera_mutex == NULL || g_state.status_mutex == NULL) {
+        g_state.camera_mutex == NULL || g_state.status_mutex == NULL ||
+        g_state.runtime_mutex == NULL) {
         ESP_LOGE(TAG, "同期オブジェクトの生成に失敗しました");
         vTaskDelete(NULL);
         return;

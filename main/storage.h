@@ -19,10 +19,9 @@ int64_t storage_find_latest_capture_id(const char *metadata_path);
 esp_err_t storage_save_capture_locked(const capture_request_t *request,
                                       bool camera_ready,
                                       SemaphoreHandle_t camera_mutex,
-                                      int64_t *last_capture_id,
                                       storage_status_update_fn update_status,
-                                      char *capture_id,
-                                      size_t capture_id_len,
+                                      int64_t timestamp_ms,
+                                      const char *capture_id,
                                       char *image_path,
                                       size_t image_path_len);
 
