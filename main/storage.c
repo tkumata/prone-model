@@ -12,6 +12,7 @@
 #include "esp_camera.h"
 #include "esp_log.h"
 
+#include "storage_csv.h"
 #include "storage.h"
 
 static const char *TAG = "storage_service";
@@ -76,26 +77,6 @@ static esp_err_t ensure_metadata_file(const char *metadata_path)
     return ESP_OK;
 }
 
-static esp_err_t csv_write_escaped_field(FILE *file, const char *value)
-{
-    const char *src = value == NULL ? "" : value;
-
-    if (fputc('"', file) == EOF) {
-        return ESP_FAIL;
-    }
-
-    for (size_t i = 0; src[i] != '\0'; ++i) {
-        if (src[i] == '"' && fputc('"', file) == EOF) {
-            return ESP_FAIL;
-        }
-        if (fputc(src[i], file) == EOF) {
-            return ESP_FAIL;
-        }
-    }
-
-    return fputc('"', file) == EOF ? ESP_FAIL : ESP_OK;
-}
-
 static esp_err_t append_metadata_line_locked(const capture_request_t *request,
                                              const storage_context_t *context,
                                              const camera_fb_t *fb,
@@ -110,31 +91,31 @@ static esp_err_t append_metadata_line_locked(const capture_request_t *request,
         return ESP_FAIL;
     }
 
-    if (csv_write_escaped_field(file, capture_id) != ESP_OK ||
+    if (storage_csv_write_escaped_field(file, capture_id) != ESP_OK ||
         fprintf(file, ",%lld,", (long long) timestamp_ms) < 0 ||
-        csv_write_escaped_field(file, request->subject_id) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->subject_id) != ESP_OK ||
         fputc(',', file) == EOF ||
-        csv_write_escaped_field(file, request->session_id) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->session_id) != ESP_OK ||
         fputc(',', file) == EOF ||
-        csv_write_escaped_field(file, request->location_id) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->location_id) != ESP_OK ||
         fputc(',', file) == EOF ||
-        csv_write_escaped_field(file, request->lighting_id) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->lighting_id) != ESP_OK ||
         fputc(',', file) == EOF ||
-        csv_write_escaped_field(file, request->camera_position_id) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->camera_position_id) != ESP_OK ||
         fputc(',', file) == EOF ||
-        csv_write_escaped_field(file, request->annotator_id) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->annotator_id) != ESP_OK ||
         fprintf(file, ",%d,", request->label) < 0 ||
-        csv_write_escaped_field(file, label_name_from_value(request->label)) != ESP_OK ||
+        storage_csv_write_escaped_field(file, label_name_from_value(request->label)) != ESP_OK ||
         fprintf(file, ",%d,", request->is_usable_for_training) < 0 ||
-        csv_write_escaped_field(file, request->exclude_reason) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->exclude_reason) != ESP_OK ||
         fputc(',', file) == EOF ||
-        csv_write_escaped_field(file, request->notes) != ESP_OK ||
+        storage_csv_write_escaped_field(file, request->notes) != ESP_OK ||
         fputc(',', file) == EOF ||
-        csv_write_escaped_field(file, image_path) != ESP_OK ||
+        storage_csv_write_escaped_field(file, image_path) != ESP_OK ||
         fprintf(file, ",%u,%u,%u,", (unsigned int) fb->len, (unsigned int) fb->width, (unsigned int) fb->height) < 0 ||
-        csv_write_escaped_field(file, pixel_format_name(fb->format)) != ESP_OK ||
+        storage_csv_write_escaped_field(file, pixel_format_name(fb->format)) != ESP_OK ||
         fprintf(file, ",%d,", CAMERA_JPEG_QUALITY) < 0 ||
-        csv_write_escaped_field(file, context->board_name) != ESP_OK ||
+        storage_csv_write_escaped_field(file, context->board_name) != ESP_OK ||
         fputc('\n', file) == EOF ||
         fflush(file) != 0) {
         fclose(file);
@@ -146,60 +127,6 @@ static esp_err_t append_metadata_line_locked(const capture_request_t *request,
         update_status(request->is_usable_for_training, timestamp_ms);
     }
     return ESP_OK;
-}
-
-bool storage_csv_read_field(char **cursor, char *out, size_t out_len)
-{
-    char *p = *cursor;
-    size_t idx = 0;
-    bool quoted = false;
-
-    if (p == NULL || *p == '\0') {
-        if (out_len > 0) {
-            out[0] = '\0';
-        }
-        return false;
-    }
-
-    if (*p == '"') {
-        quoted = true;
-        ++p;
-    }
-
-    while (*p != '\0') {
-        if (quoted) {
-            if (*p == '"' && p[1] == '"') {
-                if (idx + 1 < out_len) {
-                    out[idx++] = '"';
-                }
-                p += 2;
-                continue;
-            }
-            if (*p == '"') {
-                ++p;
-                break;
-            }
-        } else if (*p == ',' || *p == '\n' || *p == '\r') {
-            break;
-        }
-
-        if (idx + 1 < out_len) {
-            out[idx++] = *p;
-        }
-        ++p;
-    }
-
-    out[idx] = '\0';
-
-    while (*p == '\r' || *p == '\n') {
-        ++p;
-    }
-    if (*p == ',') {
-        ++p;
-    }
-
-    *cursor = p;
-    return true;
 }
 
 esp_err_t storage_ensure_ready(const storage_context_t *context)

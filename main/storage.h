@@ -19,7 +19,6 @@ typedef struct {
     const char *board_name;
 } storage_context_t;
 
-bool storage_csv_read_field(char **cursor, char *out, size_t out_len);
 esp_err_t storage_ensure_ready(const storage_context_t *context);
 void storage_refresh_dataset_counts(const storage_context_t *context, collector_status_t *status);
 int64_t storage_find_latest_capture_id(const storage_context_t *context);

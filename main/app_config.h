@@ -47,4 +47,13 @@ typedef struct {
     int64_t last_capture_ms;
 } collector_status_t;
 
+typedef struct {
+    bool camera_ready;
+    bool sdcard_ready;
+    bool metadata_ready;
+    bool wifi_connected;
+    bool storage_resetting;
+    int64_t last_capture_id;
+} app_runtime_t;
+
 #endif
