@@ -1,0 +1,17 @@
+[project]
+name = "prone-model-pc-pipeline"
+version = "0.1.0"
+description = "Mac 上で ESP32 収集データからうつ伏せ検知モデルを生成する PC パイプライン"
+requires-python = ">=3.11"
+dependencies = [
+  "onnx>=1.16.0",
+  "pillow>=10.4.0",
+  "torch>=2.4.0",
+]
+
+[project.scripts]
+prone-pc-pipeline = "pc_pipeline.__main__:main"
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"

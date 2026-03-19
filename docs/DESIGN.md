@@ -63,6 +63,7 @@
 - `is_usable_for_training=1` かつ `exclude_reason=""` の行だけを学習候補にする
 - `subject_id` 単位で `train / val / test` に分割する
 - JPEG を RGB 化し、`96 x 96` へ正規化した学習入力を作る
+- 分割比率の既定値は `0.70 / 0.15 / 0.15`、乱数シード既定値は `42` とする
 - PC 上で学習済み `float` モデルを生成する
 - 学習済みモデルを `ONNX` へ変換し、さらに `ESP-DL` 用成果物へ変換する
 - 分割定義、評価結果、変換済みモデルを保存し、同条件で再生成できるようにする
@@ -210,6 +211,8 @@ PC 側は次の段階で処理する。
 - 入力サイズは `96 x 96`
 - 出力は 2 要素で、順序は `non_prone`, `prone`
 - 分割単位は `subject_id`
+- 初期ハイパーパラメータは `epoch=20`, `batch_size=32`, `learning_rate=0.001`
+- 初期判定閾値は `0.50`
 - 量子化後モデルは元の分割定義と評価結果に紐付ける
 - 判定閾値は検証データで決めて固定する
 - 実機前処理は PC 側評価コードと同一にする
@@ -225,6 +228,37 @@ PC 側成果物として最低でも以下を残す。
 - 生成日時と元データ識別情報
 - 固定済み判定閾値
 - PC 量子化参照出力
+
+### 9.1 `pc_pipeline` 出力ディレクトリ
+
+```text
+artifacts/
+  pc_pipeline/
+    <run_name>/
+      config.json
+      dataset_audit.json
+      splits/
+        train.csv
+        val.csv
+        test.csv
+      checkpoints/
+        best_model.pt
+      onnx/
+        model.onnx
+      espdl/
+        model.espdl
+      reports/
+        metrics.json
+        threshold.json
+```
+
+### 9.2 `pc_pipeline` 失敗条件
+
+- 依存ライブラリ不足時は不足名を列挙して即停止する
+- `metadata.csv` 欠損、画像欠損、破損画像があれば監査結果へ記録し、学習開始前に停止する
+- 学習対象 `subject_id` が `3` 未満なら `train / val / test` 分割を作らず停止する
+- `val` または `test` が空になる場合は既定分割比率を崩さず停止する
+- `ESP-DL` 変換コマンド未指定時は `float` モデルと `ONNX` 生成までで停止できるようにする
 
 ## 10. 実機推論設計
 

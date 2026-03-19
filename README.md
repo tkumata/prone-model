@@ -148,6 +148,32 @@ Wi-Fi 認証情報は `sdkconfig` に保持します。
 
 リポジトリへ実値をコミットしない前提です。
 
+## 管理外ファイルと生成手順
+
+このリポジトリで、管理外のまま運用する前提のファイルやディレクトリのうち、利用者がコマンド実行で生成するものは以下です。
+手動で新規作成しないと進めない必須ファイルはありません。
+
+- `sdkconfig`
+  - 用途: `CONFIG_WIFI_SSID`, `CONFIG_WIFI_PASSWORD` などのローカル設定を保持する
+  - 生成方法: `idf.py menuconfig` を実行すると生成または更新される
+  - 補足: Wi-Fi 認証情報はここで設定し、`vi` などでの手動新規作成は不要
+- `.venv/`
+  - 用途: PC 側パイプライン実行用の Python 仮想環境
+  - 生成方法: `python3 -m venv .venv`
+  - 補足: 生成後に `source .venv/bin/activate` と `pip install -e .` を実行する
+- `artifacts/pc_pipeline/<run_name>/`
+  - 用途: PC 側パイプラインの成果物出力先
+  - 生成方法: `python3 -m pc_pipeline --dataset-root /path/to/exported/dataset` を実行すると自動生成される
+  - 補足: 事前に `mkdir` や手動作成は不要
+- `managed_components/`
+  - 用途: `ESP-IDF` のコンポーネント管理で取得された依存物を保持する
+  - 生成方法: 初回の `idf.py build` などで必要に応じて自動生成される
+  - 補足: 手動作成は不要
+- `build/`
+  - 用途: `ESP-IDF` ビルド生成物を保持する
+  - 生成方法: `idf.py build` を実行すると自動生成される
+  - 補足: 手動作成は不要
+
 ## API
 
 - `GET /`
@@ -184,6 +210,51 @@ idf.py set-target esp32s3
 idf.py menuconfig
 idf.py build
 idf.py -p <PORT> flash monitor
+```
+
+## PC でのモデル生成
+
+Mac 上では `python3` を使って PC 側パイプラインを実行します。
+最も確実な実行方法は `python3 -m pc_pipeline` です。
+`prone-pc-pipeline` は `pip install -e .` 実行後に使えるようになる別名コマンドです。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+python3 -m pc_pipeline --dataset-root /path/to/exported/dataset
+```
+
+`pip install -e .` の後は、次の別名コマンドでも実行できます。
+
+```bash
+prone-pc-pipeline --dataset-root /path/to/exported/dataset
+```
+
+主な既定値:
+
+- 入力サイズ: `96 x 96`
+- 分割比率: `train=0.70`, `val=0.15`, `test=0.15`
+- 乱数シード: `42`
+- 学習条件: `epoch=20`, `batch_size=32`, `learning_rate=0.001`
+- 初期判定閾値: `0.50`
+
+成果物は `artifacts/pc_pipeline/<run_name>/` に保存します。
+
+- `config.json`
+- `dataset_audit.json`
+- `splits/train.csv`, `splits/val.csv`, `splits/test.csv`
+- `checkpoints/best_model.pt`
+- `onnx/model.onnx`
+- `reports/metrics.json`
+- `reports/threshold.json`
+
+`ESP-DL` 変換コマンドが手元にある場合は、`{onnx_path}` と `{espdl_path}` を含む形で渡します。
+
+```bash
+python3 -m pc_pipeline \
+  --dataset-root /path/to/exported/dataset \
+  --espdl-converter-command "espdl_convert --input {onnx_path} --output {espdl_path}"
 ```
 
 ## 運用メモ
