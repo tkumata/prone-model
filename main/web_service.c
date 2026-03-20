@@ -25,6 +25,13 @@ static const char *HTTP_STATUS_409 = "409 Conflict";
 static const char *HTTP_STATUS_500 = "500 Internal Server Error";
 static const char *HTTP_STATUS_503 = "503 Service Unavailable";
 
+typedef struct {
+    int page;
+    int page_size;
+    int start_index;
+    int end_index;
+} manifest_pagination_t;
+
 static const char *http_status_text(httpd_err_code_t status)
 {
     switch (status) {
@@ -93,6 +100,35 @@ static esp_err_t send_text_error_with_status(httpd_req_t *req, const char *statu
     return httpd_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
 }
 
+static bool storage_lock_take(SemaphoreHandle_t storage_mutex, TickType_t wait_ticks)
+{
+    return storage_mutex != NULL && xSemaphoreTake(storage_mutex, wait_ticks) == pdTRUE;
+}
+
+static void storage_lock_give(SemaphoreHandle_t storage_mutex)
+{
+    if (storage_mutex != NULL) {
+        xSemaphoreGive(storage_mutex);
+    }
+}
+
+static esp_err_t with_storage_lock(SemaphoreHandle_t storage_mutex,
+                                   TickType_t wait_ticks,
+                                   httpd_req_t *req,
+                                   esp_err_t (*operation)(httpd_req_t *req, void *ctx),
+                                   void *operation_ctx)
+{
+    esp_err_t err;
+
+    if (!storage_lock_take(storage_mutex, wait_ticks)) {
+        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
+    }
+
+    err = operation(req, operation_ctx);
+    storage_lock_give(storage_mutex);
+    return err;
+}
+
 static esp_err_t parse_request_json(httpd_req_t *req, cJSON **out_root)
 {
     char body[MAX_HTTP_BODY_SIZE + 1];
@@ -118,6 +154,8 @@ static esp_err_t parse_request_json(httpd_req_t *req, cJSON **out_root)
 static esp_err_t json_get_string(cJSON *root, const char *key, char *out, size_t out_len, bool required)
 {
     cJSON *node = cJSON_GetObjectItemCaseSensitive(root, key);
+    size_t value_len;
+
     if (node == NULL || cJSON_IsNull(node)) {
         if (required) {
             return ESP_ERR_NOT_FOUND;
@@ -127,6 +165,10 @@ static esp_err_t json_get_string(cJSON *root, const char *key, char *out, size_t
     }
     if (!cJSON_IsString(node) || node->valuestring == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+    value_len = strlen(node->valuestring);
+    if (value_len >= out_len) {
+        return ESP_ERR_INVALID_SIZE;
     }
     snprintf(out, out_len, "%s", node->valuestring);
     return ESP_OK;
@@ -140,6 +182,49 @@ static esp_err_t json_get_int(cJSON *root, const char *key, int *out)
     }
     *out = node->valueint;
     return ESP_OK;
+}
+
+static esp_err_t parse_capture_request(cJSON *root, capture_request_t *request)
+{
+    if (json_get_string(root, "subject_id", request->subject_id, sizeof(request->subject_id), true) != ESP_OK ||
+        json_get_string(root, "session_id", request->session_id, sizeof(request->session_id), true) != ESP_OK ||
+        json_get_string(root, "location_id", request->location_id, sizeof(request->location_id), true) != ESP_OK ||
+        json_get_string(root, "lighting_id", request->lighting_id, sizeof(request->lighting_id), true) != ESP_OK ||
+        json_get_string(root, "camera_position_id", request->camera_position_id, sizeof(request->camera_position_id), true) != ESP_OK ||
+        json_get_string(root, "annotator_id", request->annotator_id, sizeof(request->annotator_id), true) != ESP_OK ||
+        json_get_string(root, "exclude_reason", request->exclude_reason, sizeof(request->exclude_reason), false) != ESP_OK ||
+        json_get_string(root, "notes", request->notes, sizeof(request->notes), false) != ESP_OK ||
+        json_get_int(root, "label", &request->label) != ESP_OK ||
+        json_get_int(root, "is_usable_for_training", &request->is_usable_for_training) != ESP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t send_capture_success(httpd_req_t *req, const char *capture_id, const char *image_path)
+{
+    cJSON *response = cJSON_CreateObject();
+    char *body;
+    esp_err_t err;
+
+    if (response == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
+    cJSON_AddBoolToObject(response, "saved", true);
+    cJSON_AddStringToObject(response, "capture_id", capture_id);
+    cJSON_AddStringToObject(response, "image_path", image_path);
+    body = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (body == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    err = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(body);
+    return err;
 }
 
 static esp_err_t send_file(httpd_req_t *req, const char *path, const char *content_type)
@@ -162,6 +247,199 @@ static esp_err_t send_file(httpd_req_t *req, const char *path, const char *conte
     }
     fclose(file);
     return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+typedef struct {
+    const char *path;
+    const char *content_type;
+} send_file_context_t;
+
+static esp_err_t send_file_operation(httpd_req_t *req, void *ctx)
+{
+    send_file_context_t *send_ctx = ctx;
+    return send_file(req, send_ctx->path, send_ctx->content_type);
+}
+
+static bool storage_available(const app_runtime_t *runtime_snapshot)
+{
+    return runtime_snapshot->sdcard_ready && runtime_snapshot->metadata_ready;
+}
+
+static esp_err_t ensure_storage_available_or_error(httpd_req_t *req, const app_runtime_t *runtime_snapshot)
+{
+    if (!storage_available(runtime_snapshot)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard error");
+    }
+    if (runtime_snapshot->storage_resetting) {
+        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
+    }
+    return ESP_OK;
+}
+
+static void parse_manifest_pagination(httpd_req_t *req, manifest_pagination_t *out_pagination)
+{
+    char query[128];
+    char page_buf[16];
+    char page_size_buf[16];
+
+    out_pagination->page = 1;
+    out_pagination->page_size = DEFAULT_PAGE_SIZE;
+
+    if (httpd_req_get_url_query_len(req) > 0 &&
+        httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (httpd_query_key_value(query, "page", page_buf, sizeof(page_buf)) == ESP_OK) {
+            out_pagination->page = atoi(page_buf);
+        }
+        if (httpd_query_key_value(query, "page_size", page_size_buf, sizeof(page_size_buf)) == ESP_OK) {
+            out_pagination->page_size = atoi(page_size_buf);
+        }
+    }
+
+    if (out_pagination->page < 1) {
+        out_pagination->page = 1;
+    }
+    if (out_pagination->page_size < 1) {
+        out_pagination->page_size = DEFAULT_PAGE_SIZE;
+    }
+    if (out_pagination->page_size > MAX_PAGE_SIZE) {
+        out_pagination->page_size = MAX_PAGE_SIZE;
+    }
+
+    out_pagination->start_index = (out_pagination->page - 1) * out_pagination->page_size;
+    out_pagination->end_index = out_pagination->start_index + out_pagination->page_size;
+}
+
+static esp_err_t parse_capture_id_from_query(httpd_req_t *req, char *capture_id, size_t capture_id_len)
+{
+    char query[128];
+
+    if (httpd_req_get_url_query_len(req) <= 0 ||
+        httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "capture_id", capture_id, capture_id_len) != ESP_OK ||
+        !is_digits_only(capture_id)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t build_manifest_response(FILE *file,
+                                         const manifest_pagination_t *pagination,
+                                         collector_status_t *status_snapshot,
+                                         cJSON *root,
+                                         cJSON *items)
+{
+    int current_index = 0;
+    char line[MAX_CSV_LINE_LEN];
+
+    if (fgets(line, sizeof(line), file) == NULL) {
+        cJSON_AddNumberToObject(root, "total_samples", status_snapshot->sample_count);
+        cJSON_AddNumberToObject(root, "page", pagination->page);
+        cJSON_AddNumberToObject(root, "page_size", pagination->page_size);
+        cJSON_AddBoolToObject(root, "has_next", false);
+        cJSON_AddItemToObject(root, "items", items);
+        return ESP_OK;
+    }
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (current_index >= pagination->start_index && current_index < pagination->end_index) {
+            storage_manifest_record_t record;
+            cJSON *item = cJSON_CreateObject();
+
+            if (item == NULL) {
+                return ESP_ERR_NO_MEM;
+            }
+            if (!storage_csv_parse_manifest_record(line, &record)) {
+                cJSON_Delete(item);
+                current_index++;
+                continue;
+            }
+
+            cJSON_AddStringToObject(item, "capture_id", record.capture_id);
+            cJSON_AddStringToObject(item, "image_path", record.image_path);
+            cJSON_AddNumberToObject(item, "timestamp_ms", (double) record.timestamp_ms);
+            cJSON_AddNumberToObject(item, "label", record.label);
+            cJSON_AddItemToArray(items, item);
+        }
+        current_index++;
+    }
+
+    cJSON_AddNumberToObject(root, "total_samples", status_snapshot->sample_count);
+    cJSON_AddNumberToObject(root, "page", pagination->page);
+    cJSON_AddNumberToObject(root, "page_size", pagination->page_size);
+    cJSON_AddBoolToObject(root, "has_next", current_index > pagination->end_index);
+    cJSON_AddItemToObject(root, "items", items);
+    return ESP_OK;
+}
+
+static esp_err_t remove_all_images(const storage_context_t *storage_context)
+{
+    DIR *dir = opendir(storage_context->images_dir);
+    struct dirent *entry;
+
+    if (dir == NULL) {
+        return ESP_OK;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        char file_path[MAX_FILE_PATH_LEN];
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        snprintf(file_path, sizeof(file_path), "%s/%s", storage_context->images_dir, entry->d_name);
+        if (unlink(file_path) != 0) {
+            closedir(dir);
+            return ESP_FAIL;
+        }
+    }
+
+    closedir(dir);
+    return ESP_OK;
+}
+
+static esp_err_t recreate_dataset_locked(web_service_context_t *context)
+{
+    esp_err_t err;
+
+    if (remove_all_images(context->storage_context) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    unlink(context->storage_context->metadata_path);
+    err = storage_ensure_ready(context->storage_context);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    context->reset_status_counts();
+    context->set_last_capture_id(0);
+    context->set_storage_ready(true, true);
+    return ESP_OK;
+}
+
+static esp_err_t send_reset_success(httpd_req_t *req)
+{
+    cJSON *response = cJSON_CreateObject();
+    char *body;
+    esp_err_t err;
+
+    if (response == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
+    cJSON_AddBoolToObject(response, "reset", true);
+    body = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (body == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    err = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(body);
+    return err;
 }
 
 static esp_err_t root_handler(httpd_req_t *req)
@@ -212,8 +490,6 @@ static esp_err_t capture_handler(httpd_req_t *req)
     char reason[128];
     char capture_id[MAX_CAPTURE_ID_LEN];
     char image_path[MAX_IMAGE_PATH_LEN];
-    cJSON *response = NULL;
-    char *body = NULL;
     esp_err_t err;
     int64_t timestamp_ms;
 
@@ -233,16 +509,7 @@ static esp_err_t capture_handler(httpd_req_t *req)
         return send_json_error(req, HTTPD_400_BAD_REQUEST, "JSON が不正です");
     }
 
-    if (json_get_string(root, "subject_id", request.subject_id, sizeof(request.subject_id), true) != ESP_OK ||
-        json_get_string(root, "session_id", request.session_id, sizeof(request.session_id), true) != ESP_OK ||
-        json_get_string(root, "location_id", request.location_id, sizeof(request.location_id), true) != ESP_OK ||
-        json_get_string(root, "lighting_id", request.lighting_id, sizeof(request.lighting_id), true) != ESP_OK ||
-        json_get_string(root, "camera_position_id", request.camera_position_id, sizeof(request.camera_position_id), true) != ESP_OK ||
-        json_get_string(root, "annotator_id", request.annotator_id, sizeof(request.annotator_id), true) != ESP_OK ||
-        json_get_string(root, "exclude_reason", request.exclude_reason, sizeof(request.exclude_reason), false) != ESP_OK ||
-        json_get_string(root, "notes", request.notes, sizeof(request.notes), false) != ESP_OK ||
-        json_get_int(root, "label", &request.label) != ESP_OK ||
-        json_get_int(root, "is_usable_for_training", &request.is_usable_for_training) != ESP_OK) {
+    if (parse_capture_request(root, &request) != ESP_OK) {
         cJSON_Delete(root);
         return send_json_error(req, HTTPD_400_BAD_REQUEST, "必須メタデータが不足または不正です");
     }
@@ -253,7 +520,7 @@ static esp_err_t capture_handler(httpd_req_t *req)
         return send_json_error(req, HTTPD_400_BAD_REQUEST, reason);
     }
 
-    if (xSemaphoreTake(context->storage_mutex, pdMS_TO_TICKS(10000)) != pdTRUE) {
+    if (!storage_lock_take(context->storage_mutex, pdMS_TO_TICKS(10000))) {
         return send_json_error_with_status(req, HTTP_STATUS_503, "保存処理が混雑しています");
     }
 
@@ -267,43 +534,36 @@ static esp_err_t capture_handler(httpd_req_t *req)
                                       capture_id,
                                       image_path,
                                       sizeof(image_path));
-    xSemaphoreGive(context->storage_mutex);
+    storage_lock_give(context->storage_mutex);
     if (err != ESP_OK) {
         return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, "保存に失敗しました");
     }
 
-    response = cJSON_CreateObject();
-    if (response == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
-    }
-    cJSON_AddBoolToObject(response, "saved", true);
-    cJSON_AddStringToObject(response, "capture_id", capture_id);
-    cJSON_AddStringToObject(response, "image_path", image_path);
-    body = cJSON_PrintUnformatted(response);
-    cJSON_Delete(response);
-    if (body == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
-    }
-
-    httpd_resp_set_type(req, "application/json");
-    err = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-    cJSON_free(body);
-    return err;
+    return send_capture_success(req, capture_id, image_path);
 }
 
 static esp_err_t metadata_handler(httpd_req_t *req)
 {
     web_service_context_t *context = req->user_ctx;
     app_runtime_t runtime_snapshot;
+    send_file_context_t send_ctx = {
+        .path = NULL,
+        .content_type = "text/csv",
+    };
+    esp_err_t err;
 
     context->copy_runtime_snapshot(&runtime_snapshot);
-    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard error");
+    err = ensure_storage_available_or_error(req, &runtime_snapshot);
+    if (err != ESP_OK) {
+        return err;
     }
-    if (runtime_snapshot.storage_resetting) {
-        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
-    }
-    return send_file(req, context->storage_context->metadata_path, "text/csv");
+
+    send_ctx.path = context->storage_context->metadata_path;
+    return with_storage_lock(context->storage_mutex,
+                             pdMS_TO_TICKS(10000),
+                             req,
+                             send_file_operation,
+                             &send_ctx);
 }
 
 static esp_err_t image_handler(httpd_req_t *req)
@@ -312,40 +572,36 @@ static esp_err_t image_handler(httpd_req_t *req)
     app_runtime_t runtime_snapshot;
     char capture_id[MAX_CAPTURE_ID_LEN];
     char path[128];
+    send_file_context_t send_ctx = {
+        .path = path,
+        .content_type = "image/jpeg",
+    };
+    esp_err_t err;
 
     context->copy_runtime_snapshot(&runtime_snapshot);
-    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "sdcard error");
-    }
-    if (runtime_snapshot.storage_resetting) {
-        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
+    err = ensure_storage_available_or_error(req, &runtime_snapshot);
+    if (err != ESP_OK) {
+        return err;
     }
 
-    if (httpd_req_get_url_query_len(req) <= 0 ||
-        httpd_req_get_url_query_str(req, path, sizeof(path)) != ESP_OK ||
-        httpd_query_key_value(path, "capture_id", capture_id, sizeof(capture_id)) != ESP_OK ||
-        !is_digits_only(capture_id)) {
+    if (parse_capture_id_from_query(req, capture_id, sizeof(capture_id)) != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "capture_id error");
     }
 
     snprintf(path, sizeof(path), "%s/%s.jpg", context->storage_context->images_dir, capture_id);
-    return send_file(req, path, "image/jpeg");
+    return with_storage_lock(context->storage_mutex,
+                             pdMS_TO_TICKS(10000),
+                             req,
+                             send_file_operation,
+                             &send_ctx);
 }
 
 static esp_err_t manifest_handler(httpd_req_t *req)
 {
     web_service_context_t *context = req->user_ctx;
     app_runtime_t runtime_snapshot;
-    char query[128];
-    char page_buf[16];
-    char page_size_buf[16];
-    int page = 1;
-    int page_size = DEFAULT_PAGE_SIZE;
-    int start_index;
-    int end_index;
-    int current_index = 0;
+    manifest_pagination_t pagination;
     FILE *file;
-    char line[MAX_CSV_LINE_LEN];
     collector_status_t status_snapshot;
     cJSON *root = cJSON_CreateObject();
     cJSON *items = cJSON_CreateArray();
@@ -359,7 +615,7 @@ static esp_err_t manifest_handler(httpd_req_t *req)
     }
 
     context->copy_runtime_snapshot(&runtime_snapshot);
-    if (!runtime_snapshot.sdcard_ready || !runtime_snapshot.metadata_ready) {
+    if (!storage_available(&runtime_snapshot)) {
         cJSON_Delete(root);
         cJSON_Delete(items);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "metadata error");
@@ -369,70 +625,32 @@ static esp_err_t manifest_handler(httpd_req_t *req)
         cJSON_Delete(items);
         return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
     }
-
-    if (httpd_req_get_url_query_len(req) > 0 &&
-        httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        if (httpd_query_key_value(query, "page", page_buf, sizeof(page_buf)) == ESP_OK) {
-            page = atoi(page_buf);
-        }
-        if (httpd_query_key_value(query, "page_size", page_size_buf, sizeof(page_size_buf)) == ESP_OK) {
-            page_size = atoi(page_size_buf);
-        }
+    if (!storage_lock_take(context->storage_mutex, pdMS_TO_TICKS(10000))) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        return send_text_error_with_status(req, HTTP_STATUS_503, "busy");
     }
 
-    if (page < 1) {
-        page = 1;
-    }
-    if (page_size < 1) {
-        page_size = DEFAULT_PAGE_SIZE;
-    }
-    if (page_size > MAX_PAGE_SIZE) {
-        page_size = MAX_PAGE_SIZE;
-    }
-
-    start_index = (page - 1) * page_size;
-    end_index = start_index + page_size;
+    parse_manifest_pagination(req, &pagination);
 
     file = fopen(context->storage_context->metadata_path, "r");
     if (file == NULL) {
+        storage_lock_give(context->storage_mutex);
         cJSON_Delete(root);
         cJSON_Delete(items);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "metadata error");
     }
 
-    fgets(line, sizeof(line), file);
-    while (fgets(line, sizeof(line), file) != NULL) {
-        if (current_index >= start_index && current_index < end_index) {
-            storage_manifest_record_t record;
-            cJSON *item = cJSON_CreateObject();
-
-            if (item == NULL) {
-                fclose(file);
-                cJSON_Delete(root);
-                cJSON_Delete(items);
-                return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
-            }
-            if (!storage_csv_parse_manifest_record(line, &record)) {
-                cJSON_Delete(item);
-                continue;
-            }
-
-            cJSON_AddStringToObject(item, "capture_id", record.capture_id);
-            cJSON_AddStringToObject(item, "image_path", record.image_path);
-            cJSON_AddNumberToObject(item, "timestamp_ms", (double) record.timestamp_ms);
-            cJSON_AddNumberToObject(item, "label", record.label);
-            cJSON_AddItemToArray(items, item);
-        }
-        current_index++;
-    }
-    fclose(file);
-
     context->copy_status_snapshot(&status_snapshot);
-    cJSON_AddNumberToObject(root, "total_samples", status_snapshot.sample_count);
-    cJSON_AddNumberToObject(root, "page", page);
-    cJSON_AddNumberToObject(root, "page_size", page_size);
-    cJSON_AddBoolToObject(root, "has_next", current_index > end_index);
-    cJSON_AddItemToObject(root, "items", items);
+    err = build_manifest_response(file, &pagination, &status_snapshot, root, items);
+    fclose(file);
+    storage_lock_give(context->storage_mutex);
+    if (err != ESP_OK) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
     body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
 
@@ -452,10 +670,6 @@ static esp_err_t reset_handler(httpd_req_t *req)
     app_runtime_t runtime_snapshot;
     cJSON *root = NULL;
     char confirm[16];
-    DIR *dir;
-    struct dirent *entry;
-    cJSON *response = NULL;
-    char *body = NULL;
     esp_err_t err;
 
     context->copy_runtime_snapshot(&runtime_snapshot);
@@ -477,55 +691,23 @@ static esp_err_t reset_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     context->set_storage_resetting(true);
-    if (xSemaphoreTake(context->storage_mutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
+    if (!storage_lock_take(context->storage_mutex, pdMS_TO_TICKS(15000))) {
         context->set_storage_resetting(false);
         return send_json_error_with_status(req, HTTP_STATUS_503, "リセット処理が混雑しています");
     }
 
-    dir = opendir(context->storage_context->images_dir);
-    if (dir != NULL) {
-        while ((entry = readdir(dir)) != NULL) {
-            char file_path[MAX_FILE_PATH_LEN];
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                continue;
-            }
-            snprintf(file_path, sizeof(file_path), "%s/%s", context->storage_context->images_dir, entry->d_name);
-            unlink(file_path);
-        }
-        closedir(dir);
-    }
-
-    unlink(context->storage_context->metadata_path);
-    err = storage_ensure_ready(context->storage_context);
-    if (err == ESP_OK) {
-        context->reset_status_counts();
-        context->set_last_capture_id(0);
-        context->set_storage_ready(true, true);
-    } else {
+    err = recreate_dataset_locked(context);
+    if (err != ESP_OK) {
         context->set_storage_ready(false, false);
     }
-    xSemaphoreGive(context->storage_mutex);
+    storage_lock_give(context->storage_mutex);
     context->set_storage_resetting(false);
 
     if (err != ESP_OK) {
         return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, "CSV の再生成に失敗しました");
     }
 
-    response = cJSON_CreateObject();
-    if (response == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
-    }
-    cJSON_AddBoolToObject(response, "reset", true);
-    body = cJSON_PrintUnformatted(response);
-    cJSON_Delete(response);
-    if (body == NULL) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
-    }
-
-    httpd_resp_set_type(req, "application/json");
-    err = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
-    cJSON_free(body);
-    return err;
+    return send_reset_success(req);
 }
 
 static esp_err_t stream_handler(httpd_req_t *req)

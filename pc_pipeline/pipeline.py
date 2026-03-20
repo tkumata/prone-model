@@ -16,6 +16,7 @@ from typing import Any
 
 BOARD_NAME = "Freenove ESP32-S3 WROOM CAM"
 CLASS_NAMES = ["non_prone", "prone"]
+SPLIT_NAMES = ("train", "val", "test")
 REQUIRED_COLUMNS = [
     "capture_id",
     "timestamp_ms",
@@ -73,14 +74,30 @@ class PipelineError(Exception):
     pass
 
 
+type MetadataRow = dict[str, str]
+type JsonDict = dict[str, Any]
+type LabelCounts = dict[str, int]
+type SubjectCounts = dict[str, int]
+
+
+def is_training_eligible_row(row: dict[str, str]) -> bool:
+    return (
+        row.get("is_usable_for_training") == "1"
+        and row.get("exclude_reason", "") == ""
+        and row.get("board_name") == BOARD_NAME
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Mac 上で収集済みデータセットからうつ伏せ検知モデルを生成します。"
     )
-    parser.add_argument("--dataset-root", required=True, help="metadata.csv と images を含むディレクトリ")
+    parser.add_argument("--dataset-root", required=True,
+                        help="metadata.csv と images を含むディレクトリ")
     parser.add_argument("--metadata-path", help="metadata.csv のパス")
     parser.add_argument("--images-dir", help="images ディレクトリのパス")
-    parser.add_argument("--output-root", default="artifacts/pc_pipeline", help="成果物の出力先")
+    parser.add_argument(
+        "--output-root", default="artifacts/pc_pipeline", help="成果物の出力先")
     parser.add_argument("--run-name", help="実行名")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--image-size", type=int, default=96)
@@ -107,7 +124,14 @@ def parse_args() -> argparse.Namespace:
 def load_runtime_modules() -> RuntimeModules:
     missing: list[str] = []
     loaded: dict[str, Any] = {}
-    for module_name in ("PIL.Image", "torch", "torch.nn", "torch.utils.data", "onnx"):
+    module_names = (
+        "PIL.Image",
+        "torch",
+        "torch.nn",
+        "torch.utils.data",
+        "onnx",
+    )
+    for module_name in module_names:
         try:
             loaded[module_name] = importlib.import_module(module_name)
         except ModuleNotFoundError:
@@ -130,8 +154,10 @@ def load_runtime_modules() -> RuntimeModules:
 
 def build_config(args: argparse.Namespace) -> PipelineConfig:
     dataset_root = Path(args.dataset_root).expanduser().resolve()
-    metadata_path = Path(args.metadata_path).expanduser().resolve() if args.metadata_path else dataset_root / "metadata.csv"
-    images_dir = Path(args.images_dir).expanduser().resolve() if args.images_dir else dataset_root / "images"
+    metadata_path = Path(args.metadata_path).expanduser().resolve(
+    ) if args.metadata_path else dataset_root / "metadata.csv"
+    images_dir = Path(args.images_dir).expanduser().resolve(
+    ) if args.images_dir else dataset_root / "images"
     output_root = Path(args.output_root).expanduser().resolve()
     run_name = args.run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -176,74 +202,75 @@ def read_metadata(metadata_path: Path) -> list[dict[str, str]]:
 
     with metadata_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        missing_columns = [column for column in REQUIRED_COLUMNS if column not in (reader.fieldnames or [])]
+        fieldnames = reader.fieldnames or []
+        missing_columns = [
+            column for column in REQUIRED_COLUMNS
+            if column not in fieldnames
+        ]
         if missing_columns:
             joined = ", ".join(missing_columns)
             raise PipelineError(f"metadata.csv の必須列が不足しています: {joined}")
         return list(reader)
 
 
-def audit_dataset(rows: list[dict[str, str]], dataset_root: Path, runtime: RuntimeModules) -> dict[str, Any]:
-    errors: list[dict[str, Any]] = []
-    warnings: list[dict[str, Any]] = []
-    image_module = runtime.Image
+def collect_row_errors(
+    row: MetadataRow,
+    dataset_root: Path,
+    runtime: RuntimeModules,
+) -> list[str]:
+    row_errors: list[str] = []
+
+    for column in REQUIRED_COLUMNS:
+        if row.get(column, "") == "":
+            row_errors.append(f"{column} が空です")
+
+    if row.get("board_name") != BOARD_NAME:
+        row_errors.append("board_name が想定値ではありません")
+    if row.get("label") not in {"0", "1"}:
+        row_errors.append("label が 0 または 1 ではありません")
+    if row.get("label_name") not in CLASS_NAMES:
+        row_errors.append("label_name が想定値ではありません")
+    if row.get("is_usable_for_training") not in {"0", "1"}:
+        row_errors.append("is_usable_for_training が 0 または 1 ではありません")
+    if (
+        row.get("is_usable_for_training") == "1"
+        and row.get("exclude_reason", "") != ""
+    ):
+        row_errors.append("学習利用可なのに exclude_reason が空ではありません")
+    if (
+        row.get("is_usable_for_training") == "0"
+        and row.get("exclude_reason", "") == ""
+    ):
+        row_errors.append("学習利用不可なのに exclude_reason が空です")
+
+    image_path = dataset_root / row.get("image_path", "")
+    if not image_path.exists():
+        row_errors.append("対応画像が存在しません")
+    else:
+        try:
+            with runtime.Image.open(image_path) as image:
+                image.verify()
+        except Exception:
+            row_errors.append("画像が破損しています")
+
+    return row_errors
+
+
+def summarize_training_rows(
+    rows: list[MetadataRow],
+) -> tuple[LabelCounts, SubjectCounts, list[JsonDict]]:
+    label_counts: LabelCounts = {"0": 0, "1": 0}
+    subject_counts: SubjectCounts = {}
+    warnings: list[JsonDict] = []
 
     for row in rows:
-        capture_id = row.get("capture_id", "")
-        row_errors: list[str] = []
-
-        for column in REQUIRED_COLUMNS:
-            if row.get(column, "") == "":
-                row_errors.append(f"{column} が空です")
-
-        if row.get("board_name") != BOARD_NAME:
-            row_errors.append("board_name が想定値ではありません")
-
-        if row.get("label") not in {"0", "1"}:
-            row_errors.append("label が 0 または 1 ではありません")
-
-        if row.get("label_name") not in CLASS_NAMES:
-            row_errors.append("label_name が想定値ではありません")
-
-        if row.get("is_usable_for_training") not in {"0", "1"}:
-            row_errors.append("is_usable_for_training が 0 または 1 ではありません")
-
-        if row.get("is_usable_for_training") == "1" and row.get("exclude_reason", "") != "":
-            row_errors.append("学習利用可なのに exclude_reason が空ではありません")
-
-        if row.get("is_usable_for_training") == "0" and row.get("exclude_reason", "") == "":
-            row_errors.append("学習利用不可なのに exclude_reason が空です")
-
-        image_path = dataset_root / row.get("image_path", "")
-        if not image_path.exists():
-            row_errors.append("対応画像が存在しません")
-        else:
-            try:
-                with image_module.open(image_path) as image:
-                    image.verify()
-            except Exception:
-                row_errors.append("画像が破損しています")
-
-        if row_errors:
-            errors.append({"capture_id": capture_id, "errors": row_errors})
-
-    usable_rows = [
-        row
-        for row in rows
-        if row.get("is_usable_for_training") == "1"
-        and row.get("exclude_reason", "") == ""
-        and row.get("board_name") == BOARD_NAME
-    ]
-
-    label_counts = {"0": 0, "1": 0}
-    subject_counts: dict[str, int] = {}
-    for row in usable_rows:
         label_counts[row["label"]] += 1
-        subject_counts[row["subject_id"]] = subject_counts.get(row["subject_id"], 0) + 1
+        subject_id = row["subject_id"]
+        subject_counts[subject_id] = subject_counts.get(subject_id, 0) + 1
 
-    total_usable = len(usable_rows)
+    total_rows = len(rows)
     for subject_id, count in sorted(subject_counts.items()):
-        if total_usable > 0 and count / total_usable > 0.20:
+        if total_rows > 0 and count / total_rows > 0.20:
             warnings.append(
                 {
                     "subject_id": subject_id,
@@ -252,9 +279,28 @@ def audit_dataset(rows: list[dict[str, str]], dataset_root: Path, runtime: Runti
                 }
             )
 
+    return label_counts, subject_counts, warnings
+
+
+def audit_dataset(
+    rows: list[MetadataRow],
+    dataset_root: Path,
+    runtime: RuntimeModules,
+) -> JsonDict:
+    errors: list[JsonDict] = []
+
+    for row in rows:
+        row_errors = collect_row_errors(row, dataset_root, runtime)
+        if row_errors:
+            errors.append({"capture_id": row.get(
+                "capture_id", ""), "errors": row_errors})
+
+    usable_rows = [row for row in rows if is_training_eligible_row(row)]
+    label_counts, subject_counts, warnings = summarize_training_rows(
+        usable_rows)
     return {
         "total_rows": len(rows),
-        "usable_rows": total_usable,
+        "usable_rows": len(usable_rows),
         "subject_count": len(subject_counts),
         "label_counts": label_counts,
         "errors": errors,
@@ -263,19 +309,16 @@ def audit_dataset(rows: list[dict[str, str]], dataset_root: Path, runtime: Runti
 
 
 def select_training_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    training_rows = [
-        row
-        for row in rows
-        if row["is_usable_for_training"] == "1"
-        and row["exclude_reason"] == ""
-        and row["board_name"] == BOARD_NAME
-    ]
+    training_rows = [row for row in rows if is_training_eligible_row(row)]
     if not training_rows:
         raise PipelineError("学習対象行が 0 件です")
     return training_rows
 
 
-def allocate_subject_counts(subject_count: int, ratios: tuple[float, float, float]) -> tuple[int, int, int]:
+def allocate_subject_counts(
+    subject_count: int,
+    ratios: tuple[float, float, float],
+) -> tuple[int, int, int]:
     if subject_count < 3:
         raise PipelineError("学習対象 subject_id が 3 件未満のため分割できません")
 
@@ -297,7 +340,10 @@ def allocate_subject_counts(subject_count: int, ratios: tuple[float, float, floa
     return counts
 
 
-def split_rows_by_subject(rows: list[dict[str, str]], config: PipelineConfig) -> dict[str, list[dict[str, str]]]:
+def split_rows_by_subject(
+    rows: list[MetadataRow],
+    config: PipelineConfig,
+) -> dict[str, list[MetadataRow]]:
     subject_ids = sorted({row["subject_id"] for row in rows})
     train_subjects, val_subjects, test_subjects = allocate_subject_counts(
         len(subject_ids),
@@ -307,10 +353,15 @@ def split_rows_by_subject(rows: list[dict[str, str]], config: PipelineConfig) ->
     rng.shuffle(subject_ids)
 
     train_set = set(subject_ids[:train_subjects])
-    val_set = set(subject_ids[train_subjects : train_subjects + val_subjects])
-    test_set = set(subject_ids[train_subjects + val_subjects : train_subjects + val_subjects + test_subjects])
+    val_set = set(subject_ids[train_subjects: train_subjects + val_subjects])
+    test_set = set(
+        subject_ids[
+            train_subjects + val_subjects:
+            train_subjects + val_subjects + test_subjects
+        ]
+    )
 
-    splits = {"train": [], "val": [], "test": []}
+    splits = {split_name: [] for split_name in SPLIT_NAMES}
     for row in rows:
         subject_id = row["subject_id"]
         if subject_id in train_set:
@@ -320,7 +371,7 @@ def split_rows_by_subject(rows: list[dict[str, str]], config: PipelineConfig) ->
         elif subject_id in test_set:
             splits["test"].append(row)
 
-    for split_name in ("train", "val", "test"):
+    for split_name in SPLIT_NAMES:
         if not splits[split_name]:
             raise PipelineError(f"{split_name} が空になったため学習を中止します")
     return splits
@@ -328,13 +379,15 @@ def split_rows_by_subject(rows: list[dict[str, str]], config: PipelineConfig) ->
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(payload, ensure_ascii=False,
+                    indent=2), encoding="utf-8")
 
 
 def write_split_csv(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=REQUIRED_COLUMNS + ["split"])
+        writer = csv.DictWriter(
+            handle, fieldnames=REQUIRED_COLUMNS + ["split"])
         writer.writeheader()
         for row in rows:
             record = dict(row)
@@ -344,13 +397,17 @@ def write_split_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 def choose_device(runtime: RuntimeModules, requested: str) -> str:
     torch = runtime.torch
+    mps_backend = getattr(torch.backends, "mps", None)
+    mps_available = bool(
+        mps_backend and torch.backends.mps.is_available()
+    )
     if requested == "cpu":
         return "cpu"
     if requested == "mps":
-        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        if mps_available:
             return "mps"
         raise PipelineError("MPS が利用できません")
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+    if mps_available:
         return "mps"
     return "cpu"
 
@@ -361,7 +418,12 @@ def build_dataset_class(runtime: RuntimeModules):
     dataset_base = runtime.Dataset
 
     class CaptureDataset(dataset_base):
-        def __init__(self, rows: list[dict[str, str]], image_size: int, dataset_root: Path) -> None:
+        def __init__(
+            self,
+            rows: list[MetadataRow],
+            image_size: int,
+            dataset_root: Path,
+        ) -> None:
             self.rows = rows
             self.image_size = image_size
             self.dataset_root = dataset_root
@@ -373,14 +435,31 @@ def build_dataset_class(runtime: RuntimeModules):
             row = self.rows[index]
             image_path = self.dataset_root / row["image_path"]
             with image_module.open(image_path) as image:
-                resized = image.convert("RGB").resize((self.image_size, self.image_size))
+                resized = image.convert("RGB").resize(
+                    (self.image_size, self.image_size))
                 pixels = list(resized.getdata())
-            tensor = torch.tensor(pixels, dtype=torch.float32).view(self.image_size, self.image_size, 3)
+            tensor = torch.tensor(pixels, dtype=torch.float32).view(
+                self.image_size, self.image_size, 3)
             tensor = tensor.permute(2, 0, 1) / 255.0
             label = torch.tensor(int(row["label"]), dtype=torch.long)
             return tensor, label
 
     return CaptureDataset
+
+
+def build_data_loader(
+    data_loader: Any,
+    dataset: Any,
+    batch_size: int,
+    *,
+    shuffle: bool,
+) -> Any:
+    return data_loader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=0,
+    )
 
 
 def build_model(runtime: RuntimeModules) -> Any:
@@ -401,7 +480,13 @@ def build_model(runtime: RuntimeModules) -> Any:
     )
 
 
-def collect_predictions(model: Any, loader: Any, runtime: RuntimeModules, device: str, criterion: Any) -> dict[str, Any]:
+def collect_predictions(
+    model: Any,
+    loader: Any,
+    runtime: RuntimeModules,
+    device: str,
+    criterion: Any,
+) -> JsonDict:
     torch = runtime.torch
     model.eval()
     total_loss = 0.0
@@ -417,14 +502,23 @@ def collect_predictions(model: Any, loader: Any, runtime: RuntimeModules, device
             total_loss += float(loss.item()) * int(targets.size(0))
             probs = torch.softmax(logits, dim=1)[:, 1].detach().cpu().tolist()
             probabilities.extend(float(value) for value in probs)
-            labels.extend(int(value) for value in targets.detach().cpu().tolist())
+            labels.extend(int(value)
+                          for value in targets.detach().cpu().tolist())
 
     count = len(labels)
     average_loss = total_loss / count if count else 0.0
-    return {"loss": average_loss, "probabilities": probabilities, "labels": labels}
+    return {
+        "loss": average_loss,
+        "probabilities": probabilities,
+        "labels": labels,
+    }
 
 
-def compute_metrics(labels: list[int], probabilities: list[float], threshold: float) -> dict[str, Any]:
+def compute_metrics(
+    labels: list[int],
+    probabilities: list[float],
+    threshold: float,
+) -> JsonDict:
     tp = fp = tn = fn = 0
     for label, probability in zip(labels, probabilities):
         prediction = 1 if probability >= threshold else 0
@@ -458,17 +552,43 @@ def compute_metrics(labels: list[int], probabilities: list[float], threshold: fl
     }
 
 
-def choose_threshold(labels: list[int], probabilities: list[float], initial_threshold: float) -> dict[str, Any]:
+def choose_threshold(
+    labels: list[int],
+    probabilities: list[float],
+    initial_threshold: float,
+) -> JsonDict:
     candidates = [round(value / 100, 2) for value in range(5, 100, 5)]
     best_metrics = compute_metrics(labels, probabilities, initial_threshold)
     for candidate in candidates:
         candidate_metrics = compute_metrics(labels, probabilities, candidate)
-        is_better = candidate_metrics["balanced_accuracy"] > best_metrics["balanced_accuracy"]
-        same_score = candidate_metrics["balanced_accuracy"] == best_metrics["balanced_accuracy"]
-        closer_to_default = abs(candidate - initial_threshold) < abs(best_metrics["threshold"] - initial_threshold)
+        is_better = (
+            candidate_metrics["balanced_accuracy"]
+            > best_metrics["balanced_accuracy"]
+        )
+        same_score = (
+            candidate_metrics["balanced_accuracy"]
+            == best_metrics["balanced_accuracy"]
+        )
+        closer_to_default = abs(
+            candidate - initial_threshold
+        ) < abs(best_metrics["threshold"] - initial_threshold)
         if is_better or (same_score and closer_to_default):
             best_metrics = candidate_metrics
     return best_metrics
+
+
+def metrics_with_loss(
+    prediction: JsonDict,
+    threshold: float,
+) -> JsonDict:
+    return {
+        **compute_metrics(
+            prediction["labels"],
+            prediction["probabilities"],
+            threshold,
+        ),
+        "loss": prediction["loss"],
+    }
 
 
 def train_model(
@@ -485,13 +605,30 @@ def train_model(
     device = choose_device(runtime, config.device)
     model = build_model(runtime).to(device)
 
-    train_dataset = dataset_class(splits["train"], config.image_size, dataset_root)
-    val_dataset = dataset_class(splits["val"], config.image_size, dataset_root)
-    test_dataset = dataset_class(splits["test"], config.image_size, dataset_root)
-
-    train_loader = data_loader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=0)
-    val_loader = data_loader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=0)
-    test_loader = data_loader(test_dataset, batch_size=config.batch_size, shuffle=False, num_workers=0)
+    datasets = {
+        split_name: dataset_class(split_rows, config.image_size, dataset_root)
+        for split_name, split_rows in splits.items()
+    }
+    loaders = {
+        "train": build_data_loader(
+            data_loader,
+            datasets["train"],
+            config.batch_size,
+            shuffle=True,
+        ),
+        "val": build_data_loader(
+            data_loader,
+            datasets["val"],
+            config.batch_size,
+            shuffle=False,
+        ),
+        "test": build_data_loader(
+            data_loader,
+            datasets["test"],
+            config.batch_size,
+            shuffle=False,
+        ),
+    }
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
@@ -507,7 +644,7 @@ def train_model(
         model.train()
         train_loss_total = 0.0
         train_count = 0
-        for images, labels in train_loader:
+        for images, labels in loaders["train"]:
             images = images.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
@@ -519,7 +656,8 @@ def train_model(
             train_loss_total += float(loss.item()) * batch_size
             train_count += batch_size
 
-        val_prediction = collect_predictions(model, val_loader, runtime, device, criterion)
+        val_prediction = collect_predictions(
+            model, loaders["val"], runtime, device, criterion)
         threshold_metrics = choose_threshold(
             val_prediction["labels"],
             val_prediction["probabilities"],
@@ -528,7 +666,9 @@ def train_model(
 
         epoch_record = {
             "epoch": epoch,
-            "train_loss": train_loss_total / train_count if train_count else 0.0,
+            "train_loss": (
+                train_loss_total / train_count if train_count else 0.0
+            ),
             "val_loss": val_prediction["loss"],
             "val_balanced_accuracy": threshold_metrics["balanced_accuracy"],
             "selected_threshold": threshold_metrics["threshold"],
@@ -538,7 +678,8 @@ def train_model(
         if threshold_metrics["balanced_accuracy"] > best_score:
             best_score = threshold_metrics["balanced_accuracy"]
             best_threshold = float(threshold_metrics["threshold"])
-            best_state = {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()}
+            best_state = {name: tensor.detach().cpu()
+                          for name, tensor in model.state_dict().items()}
 
     if best_state is None:
         raise PipelineError("学習済みモデルを保存できませんでした")
@@ -548,25 +689,19 @@ def train_model(
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(best_state, checkpoint_path)
 
-    val_prediction = collect_predictions(model, val_loader, runtime, device, criterion)
-    test_prediction = collect_predictions(model, test_loader, runtime, device, criterion)
-    train_prediction = collect_predictions(model, train_loader, runtime, device, criterion)
+    val_prediction = collect_predictions(
+        model, loaders["val"], runtime, device, criterion)
+    test_prediction = collect_predictions(
+        model, loaders["test"], runtime, device, criterion)
+    train_prediction = collect_predictions(
+        model, loaders["train"], runtime, device, criterion)
 
     metrics = {
         "device": device,
         "history": history,
-        "train": {
-            **compute_metrics(train_prediction["labels"], train_prediction["probabilities"], best_threshold),
-            "loss": train_prediction["loss"],
-        },
-        "val": {
-            **compute_metrics(val_prediction["labels"], val_prediction["probabilities"], best_threshold),
-            "loss": val_prediction["loss"],
-        },
-        "test": {
-            **compute_metrics(test_prediction["labels"], test_prediction["probabilities"], best_threshold),
-            "loss": test_prediction["loss"],
-        },
+        "train": metrics_with_loss(train_prediction, best_threshold),
+        "val": metrics_with_loss(val_prediction, best_threshold),
+        "test": metrics_with_loss(test_prediction, best_threshold),
     }
     return {
         "model": model,
@@ -577,7 +712,12 @@ def train_model(
     }
 
 
-def export_onnx(model: Any, runtime: RuntimeModules, config: PipelineConfig, run_dir: Path) -> Path:
+def export_onnx(
+    model: Any,
+    runtime: RuntimeModules,
+    config: PipelineConfig,
+    run_dir: Path,
+) -> Path:
     torch = runtime.torch
     onnx_path = run_dir / "onnx" / "model.onnx"
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
@@ -594,7 +734,11 @@ def export_onnx(model: Any, runtime: RuntimeModules, config: PipelineConfig, run
     return onnx_path
 
 
-def run_espdl_conversion(command_template: str | None, onnx_path: Path, run_dir: Path) -> dict[str, Any]:
+def run_espdl_conversion(
+    command_template: str | None,
+    onnx_path: Path,
+    run_dir: Path,
+) -> JsonDict:
     if not command_template:
         return {
             "requested": False,
@@ -604,7 +748,8 @@ def run_espdl_conversion(command_template: str | None, onnx_path: Path, run_dir:
 
     espdl_path = run_dir / "espdl" / "model.espdl"
     espdl_path.parent.mkdir(parents=True, exist_ok=True)
-    command = command_template.format(onnx_path=str(onnx_path), espdl_path=str(espdl_path))
+    command = command_template.format(
+        onnx_path=str(onnx_path), espdl_path=str(espdl_path))
     completed = subprocess.run(
         shlex.split(command),
         capture_output=True,
@@ -645,7 +790,8 @@ def run_pipeline(config: PipelineConfig) -> Path:
     for split_name, split_rows in splits.items():
         write_split_csv(run_dir / "splits" / f"{split_name}.csv", split_rows)
 
-    training_result = train_model(splits, dataset_root, config, runtime, run_dir)
+    training_result = train_model(
+        splits, dataset_root, config, runtime, run_dir)
     write_json(
         run_dir / "reports" / "metrics.json",
         training_result["metrics"],
@@ -660,7 +806,8 @@ def run_pipeline(config: PipelineConfig) -> Path:
     )
 
     onnx_path = export_onnx(training_result["model"], runtime, config, run_dir)
-    conversion_result = run_espdl_conversion(config.espdl_converter_command, onnx_path, run_dir)
+    conversion_result = run_espdl_conversion(
+        config.espdl_converter_command, onnx_path, run_dir)
     write_json(run_dir / "reports" / "conversion.json", conversion_result)
     return run_dir
 
