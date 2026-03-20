@@ -74,10 +74,10 @@ class PipelineError(Exception):
     pass
 
 
-type MetadataRow = dict[str, str]
-type JsonDict = dict[str, Any]
-type LabelCounts = dict[str, int]
-type SubjectCounts = dict[str, int]
+MetadataRow = dict[str, str]
+JsonDict = dict[str, Any]
+LabelCounts = dict[str, int]
+SubjectCounts = dict[str, int]
 
 
 def is_training_eligible_row(row: dict[str, str]) -> bool:
