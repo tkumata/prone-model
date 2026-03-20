@@ -81,13 +81,34 @@ type SubjectCounts = dict[str, int]
 
 
 def is_training_eligible_row(row: dict[str, str]) -> bool:
-    return (
+    # Basic checks for usability flags and board type.
+    if not (
         row.get("is_usable_for_training") == "1"
         and row.get("exclude_reason", "") == ""
         and row.get("board_name") == BOARD_NAME
-    )
+    ):
+        return False
 
+    # Validate label and label_name so that downstream aggregation (e.g. summarize_training_rows)
+    # does not see unknown/invalid labels that could cause KeyError.
+    label = row.get("label")
+    label_name = row.get("label_name")
 
+    if not label or not label_name:
+        return False
+
+    try:
+        label_idx = int(label)
+    except (TypeError, ValueError):
+        return False
+
+    if not (0 <= label_idx < len(CLASS_NAMES)):
+        return False
+
+    if CLASS_NAMES[label_idx] != label_name:
+        return False
+
+    return True
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Mac 上で収集済みデータセットからうつ伏せ検知モデルを生成します。"
