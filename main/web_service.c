@@ -32,6 +32,17 @@ typedef struct {
     int end_index;
 } manifest_pagination_t;
 
+static esp_err_t send_embedded_asset(httpd_req_t *req, const web_ui_asset_t *asset)
+{
+    if (asset == NULL || asset->content == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "asset error");
+    }
+
+    httpd_resp_set_type(req, asset->content_type);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, asset->content, asset->length);
+}
+
 static const char *http_status_text(httpd_err_code_t status)
 {
     switch (status) {
@@ -444,8 +455,17 @@ static esp_err_t send_reset_success(httpd_req_t *req)
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, web_ui_html(), HTTPD_RESP_USE_STRLEN);
+    return send_embedded_asset(req, web_ui_html_asset());
+}
+
+static esp_err_t css_handler(httpd_req_t *req)
+{
+    return send_embedded_asset(req, web_ui_css_asset());
+}
+
+static esp_err_t js_handler(httpd_req_t *req)
+{
+    return send_embedded_asset(req, web_ui_js_asset());
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
@@ -772,6 +792,8 @@ esp_err_t web_service_start(web_service_context_t *context)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_uri_t uri_root = {.uri = "/", .method = HTTP_GET, .handler = root_handler, .user_ctx = context};
+    httpd_uri_t uri_css = {.uri = "/app.css", .method = HTTP_GET, .handler = css_handler, .user_ctx = context};
+    httpd_uri_t uri_js = {.uri = "/app.js", .method = HTTP_GET, .handler = js_handler, .user_ctx = context};
     httpd_uri_t uri_status = {.uri = "/api/status", .method = HTTP_GET, .handler = status_handler, .user_ctx = context};
     httpd_uri_t uri_capture = {.uri = "/api/capture", .method = HTTP_POST, .handler = capture_handler, .user_ctx = context};
     httpd_uri_t uri_manifest = {.uri = "/api/export/manifest", .method = HTTP_GET, .handler = manifest_handler, .user_ctx = context};
@@ -780,7 +802,7 @@ esp_err_t web_service_start(web_service_context_t *context)
     httpd_uri_t uri_reset = {.uri = "/api/reset", .method = HTTP_POST, .handler = reset_handler, .user_ctx = context};
     esp_err_t err;
 
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     config.server_port = 80;
     config.stack_size = 12288;
     config.max_open_sockets = 4;
@@ -797,6 +819,8 @@ esp_err_t web_service_start(web_service_context_t *context)
     }
 
     httpd_register_uri_handler(*context->server, &uri_root);
+    httpd_register_uri_handler(*context->server, &uri_css);
+    httpd_register_uri_handler(*context->server, &uri_js);
     httpd_register_uri_handler(*context->server, &uri_status);
     httpd_register_uri_handler(*context->server, &uri_capture);
     httpd_register_uri_handler(*context->server, &uri_manifest);
