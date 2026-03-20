@@ -23,6 +23,12 @@ static const char *METADATA_HEADER =
     "exclude_reason,notes,image_path,image_bytes,frame_width,frame_height,"
     "pixel_format,jpeg_quality,board_name\n";
 
+#define STORAGE_COUNT_FIELD_WIDTH (MAX_NOTES_LEN > MAX_ID_LEN ? MAX_NOTES_LEN : MAX_ID_LEN)
+#define STORAGE_COUNT_FIELD_COUNT 20
+#define STORAGE_USABLE_FIELD_INDEX 10
+#define STORAGE_EXCLUDE_REASON_FIELD_INDEX 11
+#define STORAGE_TIMESTAMP_FIELD_INDEX 1
+
 static const char *label_name_from_value(int label)
 {
     return label == 1 ? "prone" : "non_prone";
@@ -75,6 +81,78 @@ static esp_err_t ensure_metadata_file(const char *metadata_path)
     }
     fclose(file);
     return ESP_OK;
+}
+
+static bool flush_truncated_line(FILE *file, char *line)
+{
+    if (strchr(line, '\n') != NULL || feof(file)) {
+        return false;
+    }
+
+    while (true) {
+        int ch = fgetc(file);
+        if (ch == '\n' || ch == EOF) {
+            break;
+        }
+    }
+    return true;
+}
+
+static bool metadata_row_is_usable(char fields[STORAGE_COUNT_FIELD_COUNT][STORAGE_COUNT_FIELD_WIDTH])
+{
+    return strcmp(fields[STORAGE_USABLE_FIELD_INDEX], "1") == 0 &&
+           fields[STORAGE_EXCLUDE_REASON_FIELD_INDEX][0] == '\0';
+}
+
+static bool parse_metadata_fields(char *line,
+                                  char fields[STORAGE_COUNT_FIELD_COUNT][STORAGE_COUNT_FIELD_WIDTH],
+                                  int *field_count_out)
+{
+    char *cursor = line;
+    int field_count = 0;
+
+    memset(fields, 0, sizeof(char[STORAGE_COUNT_FIELD_COUNT][STORAGE_COUNT_FIELD_WIDTH]));
+    while (field_count < STORAGE_COUNT_FIELD_COUNT &&
+           storage_csv_read_field(&cursor, fields[field_count], STORAGE_COUNT_FIELD_WIDTH)) {
+        field_count++;
+        if (*cursor == '\0') {
+            break;
+        }
+    }
+
+    *field_count_out = field_count;
+    return field_count > 0;
+}
+
+static void reset_dataset_counts(collector_status_t *status)
+{
+    status->sample_count = 0;
+    status->usable_count = 0;
+    status->excluded_count = 0;
+    status->last_capture_ms = 0;
+}
+
+static void update_counts_from_metadata_fields(collector_status_t *status,
+                                               char fields[STORAGE_COUNT_FIELD_COUNT][STORAGE_COUNT_FIELD_WIDTH],
+                                               int field_count)
+{
+    int64_t timestamp_ms;
+
+    if (field_count <= STORAGE_EXCLUDE_REASON_FIELD_INDEX) {
+        return;
+    }
+
+    status->sample_count++;
+    if (metadata_row_is_usable(fields)) {
+        status->usable_count++;
+    } else {
+        status->excluded_count++;
+    }
+
+    timestamp_ms = strtoll(fields[STORAGE_TIMESTAMP_FIELD_INDEX], NULL, 10);
+    if (timestamp_ms > status->last_capture_ms) {
+        status->last_capture_ms = timestamp_ms;
+    }
 }
 
 static esp_err_t append_metadata_line_locked(const capture_request_t *request,
@@ -143,17 +221,15 @@ void storage_refresh_dataset_counts(const storage_context_t *context, collector_
 {
     FILE *file;
     char line[MAX_CSV_LINE_LEN];
+    char fields[STORAGE_COUNT_FIELD_COUNT][STORAGE_COUNT_FIELD_WIDTH];
+    int field_count;
 
     if (status == NULL || context == NULL) {
         return;
     }
 
     file = fopen(context->metadata_path, "r");
-
-    status->sample_count = 0;
-    status->usable_count = 0;
-    status->excluded_count = 0;
-    status->last_capture_ms = 0;
+    reset_dataset_counts(status);
 
     if (file == NULL) {
         return;
@@ -165,35 +241,13 @@ void storage_refresh_dataset_counts(const storage_context_t *context, collector_
     }
 
     while (fgets(line, sizeof(line), file) != NULL) {
-        char *cursor = line;
-        char field[20][MAX_ID_LEN > MAX_NOTES_LEN ? MAX_ID_LEN : MAX_NOTES_LEN];
-        int field_index = 0;
-
-        memset(field, 0, sizeof(field));
-        while (field_index < 20 && storage_csv_read_field(&cursor, field[field_index], sizeof(field[field_index]))) {
-            field_index++;
-            if (*cursor == '\0') {
-                break;
-            }
-        }
-
-        if (field_index < 12) {
+        if (flush_truncated_line(file, line)) {
             continue;
         }
-
-        status->sample_count++;
-        if (strcmp(field[10], "1") == 0 && field[11][0] == '\0') {
-            status->usable_count++;
-        } else {
-            status->excluded_count++;
+        if (!parse_metadata_fields(line, fields, &field_count)) {
+            continue;
         }
-
-        {
-            int64_t timestamp_ms = strtoll(field[1], NULL, 10);
-            if (timestamp_ms > status->last_capture_ms) {
-                status->last_capture_ms = timestamp_ms;
-            }
-        }
+        update_counts_from_metadata_fields(status, fields, field_count);
     }
 
     fclose(file);
@@ -220,9 +274,13 @@ int64_t storage_find_latest_capture_id(const storage_context_t *context)
     }
 
     while (fgets(line, sizeof(line), file) != NULL) {
-        char *cursor = line;
+        if (flush_truncated_line(file, line)) {
+            continue;
+        }
+
         char capture_id[MAX_CAPTURE_ID_LEN] = {0};
         int64_t capture_id_value;
+        char *cursor = line;
 
         if (!storage_csv_read_field(&cursor, capture_id, sizeof(capture_id))) {
             continue;

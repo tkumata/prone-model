@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>prone collector</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div
+      id="toast_stack"
+      class="toast_stack"
+      aria-live="polite"
+      aria-atomic="false"
+    ></div>
+    <div class="wrap">
+      <div class="panel">
+        <div class="stream_shell">
+          <h1>学習データ収集</h1>
+          <div class="stream_capture">
+            <button id="capture_button" type="button">撮影</button>
+          </div>
+          <div class="stream_frame">
+            <img id="stream_view" alt="stream" />
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="grid">
+          <div>
+            <label for="subject_id">subject_id</label>
+            <input id="subject_id" value="baby_001" />
+          </div>
+          <div>
+            <label for="session_id">session_id</label>
+            <input id="session_id" value="baby_001_20260315_am_setup01" />
+          </div>
+          <div>
+            <label for="location_id">location_id</label>
+            <input id="location_id" value="loc_01" />
+          </div>
+          <div>
+            <label for="lighting_id">lighting_id</label>
+            <input id="lighting_id" value="light_day" />
+          </div>
+          <div>
+            <label for="camera_position_id">camera_position_id</label>
+            <input id="camera_position_id" value="campos_top" />
+          </div>
+          <div>
+            <label for="annotator_id">annotator_id</label>
+            <input id="annotator_id" value="ann_a01" />
+          </div>
+          <div>
+            <label for="label">label</label>
+            <select id="label">
+              <option value="1">うつ伏せ</option>
+              <option value="0">非うつ伏せ</option>
+            </select>
+          </div>
+          <div>
+            <label for="is_usable_for_training">学習利用可否</label>
+            <select id="is_usable_for_training">
+              <option value="1">利用可</option>
+              <option value="0">利用不可</option>
+            </select>
+          </div>
+          <div>
+            <label for="exclude_reason">exclude_reason</label>
+            <select id="exclude_reason">
+              <option value="">空</option>
+              <option value="ambiguous_pose">ambiguous_pose</option>
+              <option value="face_not_visible">face_not_visible</option>
+              <option value="subject_missing">subject_missing</option>
+              <option value="multiple_subjects">multiple_subjects</option>
+              <option value="motion_blur">motion_blur</option>
+              <option value="poor_lighting">poor_lighting</option>
+              <option value="annotation_error">annotation_error</option>
+              <option value="other">other</option>
+            </select>
+          </div>
+          <div class="notes_field">
+            <label for="notes">notes</label>
+            <textarea id="notes" rows="4"></textarea>
+          </div>
+        </div>
+        <div class="row actions_row">
+          <div>
+            <button id="export_button" class="secondary" type="button">
+              エクスポート
+            </button>
+          </div>
+          <div>
+            <button id="reset_button" class="danger" type="button">
+              SD カードリセット
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>状態</h2>
+        <div id="status" class="status">loading...</div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
