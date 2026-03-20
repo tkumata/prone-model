@@ -18,11 +18,9 @@ static const char *allowed_exclude_reasons[] = {
 };
 
 typedef struct {
-    const char *value;
     const char *error_message;
     bool (*validator)(const capture_request_t *request);
 } request_validation_rule_t;
-
 static bool is_valid_generic_token(const char *value)
 {
     if (value == NULL || value[0] == '\0') {
