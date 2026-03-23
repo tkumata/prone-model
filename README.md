@@ -279,6 +279,9 @@ python3 -m pc_pipeline \
 - 同じ収集セッション中は `session_id`, `location_id`, `lighting_id`, `camera_position_id`, `annotator_id` を毎回変える必要はない
 - 毎回見直す主な入力は `label`, `is_usable_for_training`, `exclude_reason`, `notes`
 - `session_id` は被写体、時間帯、設置条件が変わったときに切り替える
+- `subject_id` と `session_id` は収集前に `artifacts/ledger/subject_registry.csv`, `artifacts/ledger/session_registry.csv` へ登録してから使う
+- 学習利用可否を後から変更した場合は `artifacts/ledger/training_eligibility_history.jsonl` へ追記する
+- 実機確認用に使うセッションは `dataset_role=device_validation` として学習系分割から分離する
 
 ## ドキュメント
 
@@ -289,5 +292,6 @@ python3 -m pc_pipeline \
 - [docs/LABELING_GUIDELINES.md](/Users/kumata/Developer/prone-model/docs/LABELING_GUIDELINES.md)
 - [docs/DATA_QUALITY.md](/Users/kumata/Developer/prone-model/docs/DATA_QUALITY.md)
 - [docs/NAMING_RULES.md](/Users/kumata/Developer/prone-model/docs/NAMING_RULES.md)
+- [docs/OPERATIONS.md](/Users/kumata/Developer/prone-model/docs/OPERATIONS.md)
 - [docs/ACCEPTANCE_CRITERIA.md](/Users/kumata/Developer/prone-model/docs/ACCEPTANCE_CRITERIA.md)
 - [docs/TODO.md](/Users/kumata/Developer/prone-model/docs/TODO.md)

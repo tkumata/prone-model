@@ -89,6 +89,7 @@
 - 想定より極端に暗い、ブレた、空画像が多発していない
 - 学習利用可サンプルに被写体極小画像が混入していない
 - 実機確認用として残す候補を学習候補と分離できる
+- `artifacts/ledger/session_registry.csv` の `dataset_role` が更新されている
 
 ## 9. 実機検知成立のための収集ルール
 
@@ -97,8 +98,16 @@
 - 実機確認用には `prone` への遷移直後や `non_prone` の紛らわしい姿勢も含める
 - 実機確認用には明所、室内灯、夜間灯の各条件を含める
 - 実機確認用にはカメラ近距離、中距離、斜め配置を含める
+- 実機確認用へ割り当てた `session_id` は `dataset_role=device_validation` として固定する
 
-## 10. 禁止事項
+## 10. 台帳運用
+
+- `subject_id` 新規発番前に `artifacts/ledger/subject_registry.csv` へ登録する
+- `session_id` 新規発番前に `artifacts/ledger/session_registry.csv` へ登録する
+- ラベル監査後に `review_status` を `reviewed` または `approved` へ更新する
+- 学習利用可否変更時は `artifacts/ledger/training_eligibility_history.jsonl` へ追記する
+
+## 11. 禁止事項
 
 - `subject_id` 不明のまま保存すること
 - 曖昧サンプルを `non_prone` として学習利用可で保存すること
