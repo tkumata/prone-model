@@ -261,10 +261,13 @@ prone-pc-pipeline --dataset-root /path/to/exported/dataset
 - `config.json`
 - `dataset_audit.json`
 - `splits/train.csv`, `splits/val.csv`, `splits/test.csv`
+- `training_dirs/train`, `training_dirs/val`, `training_dirs/test`
 - `checkpoints/best_model.pt`
 - `onnx/model.onnx`
 - `reports/metrics.json`
 - `reports/threshold.json`
+- `reports/quantized_reference.json`
+- `references/quantized/train.csv`, `references/quantized/val.csv`, `references/quantized/test.csv`
 
 `ESP-DL` 変換コマンドが手元にある場合は、`{onnx_path}` と `{espdl_path}` を含む形で渡します。
 
@@ -273,6 +276,16 @@ python3 -m pc_pipeline \
   --dataset-root /path/to/exported/dataset \
   --espdl-converter-command "espdl_convert --input {onnx_path} --output {espdl_path}"
 ```
+
+学習用ディレクトリを合わせて作る場合は、次を使います。
+
+```bash
+python3 -m pc_pipeline \
+  --dataset-root /path/to/exported/dataset \
+  --export-training-directories
+```
+
+既定では `training_dirs/` 配下へ `symlink` を生成します。実ファイルを複製したい場合は `--training-directory-mode copy` を指定します。
 
 ## 運用メモ
 
