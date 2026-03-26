@@ -220,6 +220,7 @@ PC 側は次の段階で処理する。
 PC 側成果物として最低でも以下を残す。
 
 - 分割済み一覧
+- 学習用ディレクトリ
 - 前処理条件
 - 学習済み `float` モデル
 - `ONNX`
@@ -241,15 +242,32 @@ artifacts/
         train.csv
         val.csv
         test.csv
+      training_dirs/
+        train/
+          non_prone/
+          prone/
+        val/
+          non_prone/
+          prone/
+        test/
+          non_prone/
+          prone/
       checkpoints/
         best_model.pt
       onnx/
         model.onnx
       espdl/
         model.espdl
+      references/
+        quantized/
+          train.csv
+          val.csv
+          test.csv
       reports/
         metrics.json
         threshold.json
+        quantized_reference.json
+        training_directories.json
 ```
 
 ### 9.2 `pc_pipeline` 失敗条件
@@ -259,6 +277,22 @@ artifacts/
 - 学習対象 `subject_id` が `3` 未満なら `train / val / test` 分割を作らず停止する
 - `val` または `test` が空になる場合は既定分割比率を崩さず停止する
 - `ESP-DL` 変換コマンド未指定時は `float` モデルと `ONNX` 生成までで停止できるようにする
+
+### 9.3 学習用ディレクトリ分割ツール
+
+- 既存の `splits/train.csv`, `splits/val.csv`, `splits/test.csv` に対応する画像ディレクトリ木を生成できること
+- 出力構造は `train / val / test` の下に `non_prone / prone` を持つこと
+- 既定の出力方法は `symlink` とし、必要時のみ `copy` を選べること
+- 既定の出力先は `artifacts/pc_pipeline/<run_name>/training_dirs/` とする
+- 再実行時は既存の同一出力先内容を置き換え、古い混在を残さないこと
+
+### 9.4 PC 量子化参照評価
+
+- 初期実装では、RGB 正規化後テンソルを 8bit 格子へ丸める疑似量子化を PC 側参照とする
+- 量子化参照評価は `train / val / test` の全分割で実施する
+- 分割ごとの指標は `reports/quantized_reference.json` に保存する
+- 分割ごとのサンプル別予測は `references/quantized/*.csv` に保存する
+- 後続の `.espdl` 比較はこの参照結果を基準にする
 
 ## 10. 実機推論設計
 

@@ -43,8 +43,8 @@
 - [x] 検証集合での判定閾値選択と `reports/threshold.json` 出力を実装する
 - [x] `reports/metrics.json` と `dataset_audit.json` の出力を実装する
 - [x] `onnx/model.onnx` の出力を実装する
-- [ ] 学習用ディレクトリ分割ツールを追加する
-- [ ] PC 側の量子化参照評価処理を実装する
+- [x] 学習用ディレクトリ分割ツールを追加する
+- [x] PC 側の量子化参照評価処理を実装する
 
 ## フェーズ4: `.espdl` 生成
 

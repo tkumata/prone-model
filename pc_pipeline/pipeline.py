@@ -59,6 +59,9 @@ class PipelineConfig:
     initial_threshold: float
     device: str
     espdl_converter_command: str | None
+    export_training_directories: bool
+    training_directory_root: str | None
+    training_directory_mode: str
 
 
 @dataclass
@@ -89,7 +92,8 @@ def is_training_eligible_row(row: dict[str, str]) -> bool:
     ):
         return False
 
-    # Validate label and label_name so that downstream aggregation (e.g. summarize_training_rows)
+    # Validate label and label_name so that downstream aggregation
+    # (e.g. summarize_training_rows)
     # does not see unknown/invalid labels that could cause KeyError.
     label = row.get("label")
     label_name = row.get("label_name")
@@ -109,6 +113,8 @@ def is_training_eligible_row(row: dict[str, str]) -> bool:
         return False
 
     return True
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Mac 上で収集済みデータセットからうつ伏せ検知モデルを生成します。"
@@ -138,6 +144,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--espdl-converter-command",
         help="{onnx_path} と {espdl_path} を含む変換コマンド文字列",
+    )
+    parser.add_argument(
+        "--export-training-directories",
+        action="store_true",
+        help="split ごとの学習用ディレクトリを生成します",
+    )
+    parser.add_argument(
+        "--training-directory-root",
+        help="学習用ディレクトリ出力先。未指定時は成果物配下の training_dirs",
+    )
+    parser.add_argument(
+        "--training-directory-mode",
+        default="symlink",
+        choices=["symlink", "copy"],
+        help="学習用ディレクトリ生成時の出力方法",
     )
     return parser.parse_args()
 
@@ -214,6 +235,13 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         initial_threshold=args.initial_threshold,
         device=args.device,
         espdl_converter_command=args.espdl_converter_command,
+        export_training_directories=args.export_training_directories,
+        training_directory_root=(
+            str(Path(args.training_directory_root).expanduser().resolve())
+            if args.training_directory_root
+            else None
+        ),
+        training_directory_mode=args.training_directory_mode,
     )
 
 
@@ -416,6 +444,70 @@ def write_split_csv(path: Path, rows: list[dict[str, str]]) -> None:
             writer.writerow(record)
 
 
+def reset_directory(path: Path) -> None:
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+        return
+
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            reset_directory(child)
+            child.rmdir()
+            continue
+        child.unlink()
+
+
+def materialize_split_directories(
+    splits: dict[str, list[MetadataRow]],
+    config: PipelineConfig,
+    run_dir: Path,
+) -> JsonDict:
+    output_root = (
+        Path(config.training_directory_root)
+        if config.training_directory_root
+        else run_dir / "training_dirs"
+    )
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    manifest: JsonDict = {
+        "output_root": str(output_root),
+        "mode": config.training_directory_mode,
+        "splits": {},
+    }
+    dataset_root = Path(config.dataset_root)
+
+    for split_name, rows in splits.items():
+        split_root = output_root / split_name
+        reset_directory(split_root)
+        split_manifest: JsonDict = {}
+
+        for class_name in CLASS_NAMES:
+            class_root = split_root / class_name
+            class_root.mkdir(parents=True, exist_ok=True)
+            split_manifest[class_name] = 0
+
+        for row in rows:
+            class_name = CLASS_NAMES[int(row["label"])]
+            source_path = dataset_root / row["image_path"]
+            destination_path = (
+                split_root
+                / class_name
+                / f'{row["capture_id"]}{source_path.suffix or ".jpg"}'
+            )
+            if destination_path.exists() or destination_path.is_symlink():
+                destination_path.unlink()
+
+            if config.training_directory_mode == "copy":
+                destination_path.write_bytes(source_path.read_bytes())
+            else:
+                destination_path.symlink_to(source_path.resolve())
+            split_manifest[class_name] += 1
+
+        manifest["splits"][split_name] = split_manifest
+
+    return manifest
+
+
 def choose_device(runtime: RuntimeModules, requested: str) -> str:
     torch = runtime.torch
     mps_backend = getattr(torch.backends, "mps", None)
@@ -438,32 +530,53 @@ def build_dataset_class(runtime: RuntimeModules):
     image_module = runtime.Image
     dataset_base = runtime.Dataset
 
+    def prepare_tensor(
+        image_path: Path,
+        image_size: int,
+        *,
+        fake_quantize: bool,
+    ) -> Any:
+        with image_module.open(image_path) as image:
+            resized = image.convert("RGB").resize((image_size, image_size))
+            pixels = list(resized.getdata())
+        tensor = torch.tensor(pixels, dtype=torch.float32).view(
+            image_size, image_size, 3
+        )
+        tensor = tensor.permute(2, 0, 1) / 255.0
+        if fake_quantize:
+            tensor = (
+                torch.clamp(torch.round(tensor * 127.0), 0.0, 127.0)
+                / 127.0
+            )
+        return tensor
+
     class CaptureDataset(dataset_base):
         def __init__(
             self,
             rows: list[MetadataRow],
             image_size: int,
             dataset_root: Path,
+            *,
+            fake_quantize_input: bool,
         ) -> None:
             self.rows = rows
             self.image_size = image_size
             self.dataset_root = dataset_root
+            self.fake_quantize_input = fake_quantize_input
 
         def __len__(self) -> int:
             return len(self.rows)
 
-        def __getitem__(self, index: int) -> tuple[Any, Any]:
+        def __getitem__(self, index: int) -> tuple[Any, Any, str]:
             row = self.rows[index]
             image_path = self.dataset_root / row["image_path"]
-            with image_module.open(image_path) as image:
-                resized = image.convert("RGB").resize(
-                    (self.image_size, self.image_size))
-                pixels = list(resized.getdata())
-            tensor = torch.tensor(pixels, dtype=torch.float32).view(
-                self.image_size, self.image_size, 3)
-            tensor = tensor.permute(2, 0, 1) / 255.0
+            tensor = prepare_tensor(
+                image_path,
+                self.image_size,
+                fake_quantize=self.fake_quantize_input,
+            )
             label = torch.tensor(int(row["label"]), dtype=torch.long)
-            return tensor, label
+            return tensor, label, row["capture_id"]
 
     return CaptureDataset
 
@@ -513,9 +626,10 @@ def collect_predictions(
     total_loss = 0.0
     probabilities: list[float] = []
     labels: list[int] = []
+    capture_ids: list[str] = []
 
     with torch.no_grad():
-        for images, targets in loader:
+        for images, targets, batch_capture_ids in loader:
             images = images.to(device)
             targets = targets.to(device)
             logits = model(images)
@@ -525,6 +639,7 @@ def collect_predictions(
             probabilities.extend(float(value) for value in probs)
             labels.extend(int(value)
                           for value in targets.detach().cpu().tolist())
+            capture_ids.extend(str(value) for value in batch_capture_ids)
 
     count = len(labels)
     average_loss = total_loss / count if count else 0.0
@@ -532,6 +647,7 @@ def collect_predictions(
         "loss": average_loss,
         "probabilities": probabilities,
         "labels": labels,
+        "capture_ids": capture_ids,
     }
 
 
@@ -627,7 +743,12 @@ def train_model(
     model = build_model(runtime).to(device)
 
     datasets = {
-        split_name: dataset_class(split_rows, config.image_size, dataset_root)
+        split_name: dataset_class(
+            split_rows,
+            config.image_size,
+            dataset_root,
+            fake_quantize_input=False,
+        )
         for split_name, split_rows in splits.items()
     }
     loaders = {
@@ -649,6 +770,12 @@ def train_model(
             config.batch_size,
             shuffle=False,
         ),
+        "train_eval": build_data_loader(
+            data_loader,
+            datasets["train"],
+            config.batch_size,
+            shuffle=False,
+        ),
     }
 
     criterion = nn.CrossEntropyLoss()
@@ -665,7 +792,7 @@ def train_model(
         model.train()
         train_loss_total = 0.0
         train_count = 0
-        for images, labels in loaders["train"]:
+        for images, labels, _ in loaders["train"]:
             images = images.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
@@ -715,7 +842,7 @@ def train_model(
     test_prediction = collect_predictions(
         model, loaders["test"], runtime, device, criterion)
     train_prediction = collect_predictions(
-        model, loaders["train"], runtime, device, criterion)
+        model, loaders["train_eval"], runtime, device, criterion)
 
     metrics = {
         "device": device,
@@ -731,6 +858,109 @@ def train_model(
         "checkpoint_path": str(checkpoint_path),
         "device": device,
     }
+
+
+def build_prediction_rows(
+    prediction: JsonDict,
+    threshold: float,
+    split_name: str,
+) -> list[JsonDict]:
+    rows: list[JsonDict] = []
+    for capture_id, label, probability in zip(
+        prediction["capture_ids"],
+        prediction["labels"],
+        prediction["probabilities"],
+    ):
+        rows.append(
+            {
+                "capture_id": capture_id,
+                "label": label,
+                "probability_prone": probability,
+                "prediction": 1 if probability >= threshold else 0,
+                "threshold": threshold,
+                "split": split_name,
+            }
+        )
+    return rows
+
+
+def write_prediction_csv(path: Path, rows: list[JsonDict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "capture_id",
+        "label",
+        "probability_prone",
+        "prediction",
+        "threshold",
+        "split",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def evaluate_quantized_reference(
+    splits: dict[str, list[MetadataRow]],
+    dataset_root: Path,
+    config: PipelineConfig,
+    runtime: RuntimeModules,
+    model: Any,
+    threshold: float,
+    device: str,
+    run_dir: Path,
+) -> JsonDict:
+    data_loader = runtime.DataLoader
+    dataset_class = build_dataset_class(runtime)
+    criterion = runtime.nn.CrossEntropyLoss()
+    datasets = {
+        split_name: dataset_class(
+            split_rows,
+            config.image_size,
+            dataset_root,
+            fake_quantize_input=True,
+        )
+        for split_name, split_rows in splits.items()
+    }
+    loaders = {
+        split_name: build_data_loader(
+            data_loader,
+            dataset,
+            config.batch_size,
+            shuffle=False,
+        )
+        for split_name, dataset in datasets.items()
+    }
+
+    report: JsonDict = {
+        "quantization_method": "input_fake_int8",
+        "quantization_note": "RGB 正規化後テンソルを 0..127 の 8bit 格子へ丸めて疑似量子化",
+        "class_order": CLASS_NAMES,
+        "threshold": threshold,
+        "splits": {},
+    }
+    for split_name in SPLIT_NAMES:
+        prediction = collect_predictions(
+            model,
+            loaders[split_name],
+            runtime,
+            device,
+            criterion,
+        )
+        rows = build_prediction_rows(prediction, threshold, split_name)
+        write_prediction_csv(
+            run_dir / "references" / "quantized" / f"{split_name}.csv",
+            rows,
+        )
+        report["splits"][split_name] = {
+            **metrics_with_loss(prediction, threshold),
+            "prediction_path": str(
+                run_dir / "references" / "quantized" / f"{split_name}.csv"
+            ),
+        }
+
+    return report
 
 
 def export_onnx(
@@ -810,6 +1040,16 @@ def run_pipeline(config: PipelineConfig) -> Path:
     splits = split_rows_by_subject(training_rows, config)
     for split_name, split_rows in splits.items():
         write_split_csv(run_dir / "splits" / f"{split_name}.csv", split_rows)
+    if config.export_training_directories:
+        training_dir_manifest = materialize_split_directories(
+            splits,
+            config,
+            run_dir,
+        )
+        write_json(
+            run_dir / "reports" / "training_directories.json",
+            training_dir_manifest,
+        )
 
     training_result = train_model(
         splits, dataset_root, config, runtime, run_dir)
@@ -824,6 +1064,20 @@ def run_pipeline(config: PipelineConfig) -> Path:
             "selection_split": "val",
             "class_order": CLASS_NAMES,
         },
+    )
+    quantized_reference = evaluate_quantized_reference(
+        splits,
+        dataset_root,
+        config,
+        runtime,
+        training_result["model"],
+        training_result["threshold"],
+        training_result["device"],
+        run_dir,
+    )
+    write_json(
+        run_dir / "reports" / "quantized_reference.json",
+        quantized_reference,
     )
 
     onnx_path = export_onnx(training_result["model"], runtime, config, run_dir)

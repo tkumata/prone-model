@@ -49,19 +49,32 @@
 - `config.json` に入力引数、前処理条件、分割条件、出力順、閾値を保存する
 - `dataset_audit.json` に監査結果を保存する
 - `splits/train.csv`, `splits/val.csv`, `splits/test.csv` を保存する
+- `--export-training-directories` 指定時は `training_dirs/<split>/<class_name>/` を生成する
+- 学習用ディレクトリ出力方式の既定値は `symlink` とし、`copy` を選択可能とする
 - `checkpoints/best_model.pt` に最良 `float` モデルを保存する
 - `onnx/model.onnx` に `ONNX` を保存する
 - `reports/metrics.json` に各分割の指標を保存する
 - `reports/threshold.json` に固定閾値を保存する
+- `reports/quantized_reference.json` に PC 側量子化参照評価結果を保存する
+- `references/quantized/train.csv`, `references/quantized/val.csv`, `references/quantized/test.csv` にサンプル別量子化参照予測を保存する
 - `espdl/model.espdl` は変換コマンド成功時のみ保存する
 
-### 3.3 PC エラー仕様
+### 3.3 PC 量子化参照仕様
+
+- 初期版の PC 量子化参照は入力テンソルに対する疑似 `int8` 量子化で行う
+- 対象は RGB 化と `96 x 96` リサイズ後、`0.0 .. 1.0` 正規化済みテンソルとする
+- 疑似量子化は `0 .. 127` の格子へ丸め、再び `0.0 .. 1.0` へ戻して推論する
+- 指標計算に使う判定閾値は `reports/threshold.json` と同一の固定値を使う
+- 出力には `capture_id`, `label`, `probability_prone`, `prediction`, `threshold`, `split` を含める
+
+### 3.4 PC エラー仕様
 
 - `metadata.csv` 不在時は即座に終了する
 - 学習対象行が 0 件なら即座に終了する
 - 学習対象 `subject_id` が 3 件未満なら即座に終了する
 - 分割結果で `val` または `test` が 0 件なら即座に終了する
 - 画像欠損または破損が 1 件でもあれば `dataset_audit.json` に記録し、既定では終了する
+- 学習用ディレクトリ生成時に元画像が欠損していれば監査エラーで学習開始前に終了する
 - `ESP-DL` 変換コマンド未指定時は `float` モデルと `ONNX` 出力後に正常終了できる
 
 ## 4. 実機推論成立仕様
