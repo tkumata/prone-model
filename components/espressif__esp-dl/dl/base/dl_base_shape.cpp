@@ -38,6 +38,12 @@ std::vector<int> get_multidirectional_broadcasting_shape(const std::vector<int> 
             dim1 = shape1[index1];
         if (index2 >= 0)
             dim2 = shape2[index2];
+
+        if (dim1 != dim2 && dim1 != 1 && dim2 != 1) {
+            assert(false && "Incompatible shapes for multidirectional broadcasting");
+            return {};
+        }
+
         output_shape[i] = DL_MAX(dim1, dim2);
     }
 

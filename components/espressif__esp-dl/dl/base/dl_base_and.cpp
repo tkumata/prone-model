@@ -13,7 +13,7 @@ void c_impl_and_n_1(feature_t *output_ptr, feature_t *input0_ptr, feature_t *inp
     int32_t length = elem_args->output_d0;
     int32_t temp = input1_ptr[0];
     for (int i = 0; i < length; i++) {
-        output_ptr[i] = input0_ptr[i] && temp;
+        output_ptr[i] = input0_ptr[i] & temp;
         // tool::truncate<int32_t>(output_ptr[i], buffer);
     }
 }
@@ -26,7 +26,7 @@ void c_impl_and_1_n(feature_t *output_ptr, feature_t *input0_ptr, feature_t *inp
     int32_t length = elem_args->output_d0;
     int32_t temp = input0_ptr[0];
     for (int i = 0; i < length; i++) {
-        output_ptr[i] = input1_ptr[i] && temp;
+        output_ptr[i] = input1_ptr[i] & temp;
         // tool::truncate<int32_t>(output_ptr[i], buffer);
     }
 }
@@ -39,7 +39,7 @@ void c_impl_and_n_n(feature_t *output_ptr, feature_t *input0_ptr, feature_t *inp
     int32_t length = elem_args->output_d0;
     // int32_t temp = 0;
     for (int i = 0; i < length; i++) {
-        output_ptr[i] = input0_ptr[i] && input1_ptr[i];
+        output_ptr[i] = input0_ptr[i] & input1_ptr[i];
         // tool::truncate<int32_t>(output_ptr[i], buffer);
     }
 }

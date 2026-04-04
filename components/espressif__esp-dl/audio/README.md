@@ -5,7 +5,7 @@ The ESP-DL Audio Processing Module is a C++ library designed for audio signal pr
 ## Features
 
 - WAV file decoding
-- Speech feature extractionincluding:
+- Speech feature extraction including:
   - Fbank (Filter Bank) features
   - MFCC (Mel-Frequency Cepstral Coefficients)
   - Spectrogram

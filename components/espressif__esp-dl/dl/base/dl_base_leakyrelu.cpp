@@ -25,17 +25,7 @@ inline void load_leakyrelu_11cn_s16(ImplFunc_t<int16_t, int16_t> &i_impl_func,
                                     c_impl_acti_s16_t &c_impl_func,
                                     const ArgsType<int16_t> &args)
 {
-#if CONFIG_TIE728_BOOST
-    if (args.input_stride_x_offset % 8 == 0 && args.output_x_offset % 8 == 0 &&
-        !((unsigned)&args.input_element[0] & 15) && !((unsigned)&args.output_element[0] & 15)) {
-        i_impl_func = dl_tie728_s16_relu_11c;
-    } else {
-        i_impl_func = dl_tie728_s16_unaligned_relu_11c;
-    }
-
-#else
     c_impl_func = leakyrelu_11c<int16_t, int32_t>;
-#endif // CONFIG_TIE_BOOST
 }
 
 template <>
@@ -59,16 +49,7 @@ inline void load_leakyrelu_11cn_s8(ImplFunc_t<int8_t, int8_t> &i_impl_func,
                                    c_impl_acti_s8_t &c_impl_func,
                                    const ArgsType<int8_t> &args)
 {
-#if CONFIG_TIE728_BOOST
-    if (args.input_stride_x_offset % 16 == 0 && args.output_x_offset % 16 == 0 &&
-        !((unsigned)&args.input_element[0] & 15) && !((unsigned)&args.output_element[0] & 15)) {
-        i_impl_func = dl_tie728_s8_relu_11c;
-    } else {
-        i_impl_func = dl_tie728_s8_unaligned_relu_11c;
-    }
-#else
     c_impl_func = leakyrelu_11c<int8_t, int16_t>;
-#endif // CONFIG_TIE_BOOST
 }
 
 template <>

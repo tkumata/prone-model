@@ -1,3 +1,5 @@
+#pragma once
+
 #include "dl_audio_common.hpp"
 
 namespace dl {
