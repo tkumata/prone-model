@@ -68,6 +68,26 @@ shape(A) = (2, 3, 4, 5), shape(B) = (1, 3, 1, 5), ==> shape(result) = (2, 3, 4, 
 */
 std::vector<int> get_unidirectional_broadcasting_shape(const std::vector<int> &shape1, const std::vector<int> &shape2)
 {
+    if (shape2.size() > shape1.size()) {
+        assert(false && "Incompatible shapes for unidirectional broadcasting");
+        return {};
+    }
+
+    int dim = shape1.size();
+    for (int i = dim - 1; i >= 0; i--) {
+        int index2 = shape2.size() - (dim - i);
+        int dim2 = 1;
+
+        if (index2 >= 0) {
+            dim2 = shape2[index2];
+        }
+
+        if (dim2 != 1 && dim2 != shape1[i]) {
+            assert(false && "Incompatible shapes for unidirectional broadcasting");
+            return {};
+        }
+    }
+
     return std::vector<int>(shape1);
 }
 

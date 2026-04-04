@@ -41,7 +41,8 @@ esp_err_t SpeechFeatureBase::process(const float *input, int input_len, float *o
 
     // Process each frame
     for (int i = 0; i < num_frames; i++) {
-        esp_err_t ret = process_frame(input, m_win_len, output, input[0]);
+        float prev = (i == 0) ? 0.0f : input[-1];
+        esp_err_t ret = process_frame(input, m_win_len, output, prev);
         if (ret != ESP_OK) {
             return ret;
         }
@@ -67,7 +68,8 @@ esp_err_t SpeechFeatureBase::process(const int16_t *input, int input_len, float 
 
     // Process each frame
     for (int i = 0; i < num_frames; i++) {
-        esp_err_t ret = process_frame(input, m_win_len, output, input[0]);
+        int16_t prev = (i == 0) ? static_cast<int16_t>(0) : input[-1];
+        esp_err_t ret = process_frame(input, m_win_len, output, prev);
         if (ret != ESP_OK) {
             return ret;
         }

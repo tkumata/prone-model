@@ -33,7 +33,7 @@ void leakyrelu<int16_t>(void *const args_ptr)
 {
     const ArgsType<int16_t> &args = *((ArgsType<int16_t> *)args_ptr);
 
-    ImplFunc_t<int16_t, int16_t> i_impl_func;
+    ImplFunc_t<int16_t, int16_t> i_impl_func = NULL;
     c_impl_acti_s16_t c_impl_func = NULL;
 
     load_leakyrelu_11cn_s16(i_impl_func, c_impl_func, args);
@@ -57,7 +57,7 @@ void leakyrelu<int8_t>(void *const args_ptr)
 {
     const ArgsType<int8_t> &args = *((ArgsType<int8_t> *)args_ptr);
 
-    ImplFunc_t<int8_t, int8_t> i_impl_func;
+    ImplFunc_t<int8_t, int8_t> i_impl_func = NULL;
     c_impl_acti_s8_t c_impl_func = NULL;
 
     load_leakyrelu_11cn_s8(i_impl_func, c_impl_func, args);

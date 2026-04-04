@@ -83,7 +83,7 @@ void prelu<int8_t>(void *const args_ptr)
 {
     const ArgsType<int8_t> &args = *((ArgsType<int8_t> *)args_ptr);
 
-    ImplFunc_t<int8_t, int8_t> i_impl_func;
+    ImplFunc_t<int8_t, int8_t> i_impl_func = NULL;
     c_impl_acti_s8_t c_impl_func = NULL;
 
 #if CONFIG_ESP32P4_BOOST

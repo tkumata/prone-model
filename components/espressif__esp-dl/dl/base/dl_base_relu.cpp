@@ -69,7 +69,7 @@ void relu<int8_t>(void *const args_ptr)
 {
     const ArgsType<int8_t> &args = *((ArgsType<int8_t> *)args_ptr);
 
-    ImplFunc_t<int8_t, int8_t> i_impl_func;
+    ImplFunc_t<int8_t, int8_t> i_impl_func = NULL;
     c_impl_acti_s8_t c_impl_func = NULL;
 
     load_relu_11cn_s8(i_impl_func, c_impl_func, args);

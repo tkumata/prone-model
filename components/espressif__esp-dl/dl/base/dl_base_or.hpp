@@ -6,14 +6,14 @@
 namespace dl {
 namespace base {
 /**
- * @brief int8 element-wise add, support ortidirectional broadcasting from 1D to 4D
+ * @brief int8 element-wise or, support multidirectional broadcasting from 1D to 4D
  *
  * @param args elemwiseArgsType
  */
 void elemwise_or(elemwiseArgsType<int8_t> *args);
 
 /**
- * @brief int16 element-wise add, support ortidirectional broadcasting from 1D to 4D
+ * @brief int16 element-wise or, support multidirectional broadcasting from 1D to 4D
  *
  * @param args elemwiseArgsType
  */

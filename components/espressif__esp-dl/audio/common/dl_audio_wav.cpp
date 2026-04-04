@@ -1,5 +1,6 @@
 
 #include "dl_audio_wav.hpp"
+#include <inttypes.h>
 namespace dl {
 namespace audio {
 
@@ -124,8 +125,8 @@ void print_audio_info(dl_audio_t *data)
     printf("  Sample Rate: %d Hz\n", data->sample_rate);
     printf("  Channels: %d\n", data->channels);
     printf("  Bits per Sample: %d\n", data->bits_per_sample);
-    printf("  Length: %ld samples\n", data->length);
-    printf("  Data Size: %ld bytes\n", sizeof(int16_t) * data->length * data->channels);
+    printf("  Length: %" PRIu32 " samples\n", data->length);
+    printf("  Data Size: %zu bytes\n", sizeof(int16_t) * (size_t)data->length * data->channels);
 }
 
 } // namespace audio

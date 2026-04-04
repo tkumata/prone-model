@@ -108,8 +108,8 @@ void avg_pool2d<int16_t>(void *args_ptr)
 {
     PoolArgsType<int16_t> &args = *((PoolArgsType<int16_t> *)args_ptr);
 
-    ImplFunc_t<int16_t, int16_t> i_impl_func;
-    ImplFunc_t<int16_t, int16_t> i_impl_func_sp;
+    ImplFunc_t<int16_t, int16_t> i_impl_func = NULL;
+    ImplFunc_t<int16_t, int16_t> i_impl_func_sp = NULL;
     avg_pool_c_impl_func_s16_t c_impl_func = NULL;
 
     load_avg_pool2d_hwc1_s16(i_impl_func, i_impl_func_sp, c_impl_func, args);
@@ -157,8 +157,8 @@ void avg_pool2d<int8_t>(void *args_ptr)
 {
     PoolArgsType<int8_t> &args = *((PoolArgsType<int8_t> *)args_ptr);
 
-    ImplFunc_t<int8_t, int8_t> i_impl_func;
-    ImplFunc_t<int8_t, int8_t> i_impl_func_sp;
+    ImplFunc_t<int8_t, int8_t> i_impl_func = NULL;
+    ImplFunc_t<int8_t, int8_t> i_impl_func_sp = NULL;
     avg_pool_c_impl_func_s8_t c_impl_func = NULL;
 #if CONFIG_ESP32P4_BOOST
     dl_esp32p4_cfg_round(ROUND_MODE_HALF_EVEN);
