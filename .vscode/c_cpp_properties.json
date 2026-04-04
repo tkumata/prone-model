@@ -2,12 +2,12 @@
   "configurations": [
     {
       "name": "ESP-IDF",
-      "compilerPath": "/Users/kumata/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
-      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+      "compilerPath": "/Users/kumata/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
+      "compileCommands": "${workspaceFolder}/build-idf6/compile_commands.json",
       "includePath": [
         "${workspaceFolder}/main",
         "${workspaceFolder}/managed_components/**",
-        "${workspaceFolder}/build/config",
+        "${workspaceFolder}/build-idf6/config",
         "${config:idf.currentSetup}/components/**",
         "${workspaceFolder}/**"
       ],
@@ -20,7 +20,7 @@
         "path": [
           "${workspaceFolder}/main",
           "${workspaceFolder}/managed_components",
-          "${workspaceFolder}/build/config",
+          "${workspaceFolder}/build-idf6/config",
           "${config:idf.currentSetup}/components",
           "${workspaceFolder}"
         ],

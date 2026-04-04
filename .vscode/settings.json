@@ -1,20 +1,20 @@
 {
-  "idf.currentSetup": "/Users/kumata/.espressif/v5.5.3/esp-idf",
+  "idf.currentSetup": "/Users/kumata/.espressif/v6.0/esp-idf",
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
   "idf.port": "/dev/tty.usbmodem5AB90112901",
-  "idf.buildPath": "${workspaceFolder}/build",
+  "idf.buildPath": "${workspaceFolder}/build-idf6",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3"
   },
-  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build-idf6/compile_commands.json",
   "C_Cpp.default.configurationProvider": "ms-vscode.cpptools",
-  "clangd.path": "/Users/kumata/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin/clangd",
+  "clangd.path": "/Users/kumata/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=/Users/kumata/Developer/prone-model/build"
+    "--compile-commands-dir=/Users/kumata/Developer/prone-model/build-idf6"
   ],
   "idf.flashType": "UART"
 }

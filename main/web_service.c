@@ -9,7 +9,9 @@
 #include "cJSON.h"
 #include "esp_camera.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
+#include "face_detection.h"
 #include "storage_csv.h"
 #include "validation.h"
 #include "web_service.h"
@@ -18,6 +20,7 @@
 #define STREAM_CONTENT_TYPE "multipart/x-mixed-replace;boundary=frame"
 #define STREAM_BOUNDARY "\r\n--frame\r\n"
 #define STREAM_PART "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n"
+#define FACE_DETECTION_INTERVAL_MS 250
 
 static const char *TAG = "web_service";
 static const char *HTTP_STATUS_400 = "400 Bad Request";
@@ -121,6 +124,46 @@ static void storage_lock_give(SemaphoreHandle_t storage_mutex)
     if (storage_mutex != NULL) {
         xSemaphoreGive(storage_mutex);
     }
+}
+
+static bool face_detection_lock_take(SemaphoreHandle_t face_detection_mutex, TickType_t wait_ticks)
+{
+    return face_detection_mutex != NULL && xSemaphoreTake(face_detection_mutex, wait_ticks) == pdTRUE;
+}
+
+static void face_detection_lock_give(SemaphoreHandle_t face_detection_mutex)
+{
+    if (face_detection_mutex != NULL) {
+        xSemaphoreGive(face_detection_mutex);
+    }
+}
+
+static void copy_face_detection_snapshot(web_service_context_t *context, face_detection_result_t *out_result)
+{
+    if (context == NULL || context->face_detection == NULL || out_result == NULL) {
+        return;
+    }
+
+    if (!face_detection_lock_take(context->face_detection_mutex, pdMS_TO_TICKS(200))) {
+        return;
+    }
+
+    *out_result = *context->face_detection;
+    face_detection_lock_give(context->face_detection_mutex);
+}
+
+static void update_face_detection_snapshot(web_service_context_t *context, const face_detection_result_t *result)
+{
+    if (context == NULL || context->face_detection == NULL || result == NULL) {
+        return;
+    }
+
+    if (!face_detection_lock_take(context->face_detection_mutex, pdMS_TO_TICKS(200))) {
+        return;
+    }
+
+    *context->face_detection = *result;
+    face_detection_lock_give(context->face_detection_mutex);
 }
 
 static esp_err_t with_storage_lock(SemaphoreHandle_t storage_mutex,
@@ -730,13 +773,68 @@ static esp_err_t reset_handler(httpd_req_t *req)
     return send_reset_success(req);
 }
 
+static esp_err_t face_detection_handler(httpd_req_t *req)
+{
+    web_service_context_t *context = req->user_ctx;
+    face_detection_result_t snapshot = {0};
+    cJSON *root = NULL;
+    cJSON *boxes = NULL;
+    char *body = NULL;
+    esp_err_t err = ESP_OK;
+    size_t index;
+
+    copy_face_detection_snapshot(context, &snapshot);
+
+    root = cJSON_CreateObject();
+    boxes = cJSON_CreateArray();
+    if (root == NULL || boxes == NULL) {
+        cJSON_Delete(root);
+        cJSON_Delete(boxes);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
+    cJSON_AddBoolToObject(root, "detector_ready", snapshot.detector_ready);
+    cJSON_AddNumberToObject(root, "frame_width", snapshot.frame_width);
+    cJSON_AddNumberToObject(root, "frame_height", snapshot.frame_height);
+    cJSON_AddNumberToObject(root, "updated_at_ms", (double) snapshot.updated_at_ms);
+    cJSON_AddNumberToObject(root, "box_count", (double) snapshot.box_count);
+    cJSON_AddItemToObject(root, "boxes", boxes);
+
+    for (index = 0; index < snapshot.box_count && index < MAX_FACE_DETECTION_BOXES; index++) {
+        cJSON *box = cJSON_CreateObject();
+        if (box == NULL) {
+            cJSON_Delete(root);
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+        }
+        cJSON_AddNumberToObject(box, "x", snapshot.boxes[index].x);
+        cJSON_AddNumberToObject(box, "y", snapshot.boxes[index].y);
+        cJSON_AddNumberToObject(box, "width", snapshot.boxes[index].width);
+        cJSON_AddNumberToObject(box, "height", snapshot.boxes[index].height);
+        cJSON_AddNumberToObject(box, "score", snapshot.boxes[index].score);
+        cJSON_AddItemToArray(boxes, box);
+    }
+
+    body = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (body == NULL) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json error");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    err = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(body);
+    return err;
+}
+
 static esp_err_t stream_handler(httpd_req_t *req)
 {
     web_service_context_t *context = req->user_ctx;
     app_runtime_t runtime_snapshot;
+    face_detection_result_t detection_result = {0};
     char part_buf[64];
     camera_fb_t *fb = NULL;
     esp_err_t err = ESP_OK;
+    int64_t last_detection_ms = 0;
 
     context->copy_runtime_snapshot(&runtime_snapshot);
     if (!runtime_snapshot.camera_ready) {
@@ -757,6 +855,27 @@ static esp_err_t stream_handler(httpd_req_t *req)
         if (fb == NULL) {
             err = ESP_FAIL;
             break;
+        }
+
+        if ((esp_timer_get_time() / 1000LL) - last_detection_ms >= FACE_DETECTION_INTERVAL_MS) {
+            int64_t detection_started_ms = esp_timer_get_time() / 1000LL;
+
+            err = face_detection_run_jpeg(fb->buf,
+                                          fb->len,
+                                          fb->width,
+                                          fb->height,
+                                          detection_started_ms,
+                                          &detection_result);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "顔検出に失敗しました: %s", esp_err_to_name(err));
+                face_detection_result_reset(&detection_result, fb->width, fb->height, detection_started_ms);
+                update_face_detection_snapshot(context, &detection_result);
+                err = ESP_OK;
+            } else {
+                update_face_detection_snapshot(context, &detection_result);
+            }
+
+            last_detection_ms = detection_started_ms;
         }
 
         if ((err = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY))) != ESP_OK) {
@@ -794,6 +913,8 @@ esp_err_t web_service_start(web_service_context_t *context)
     httpd_uri_t uri_root = {.uri = "/", .method = HTTP_GET, .handler = root_handler, .user_ctx = context};
     httpd_uri_t uri_css = {.uri = "/app.css", .method = HTTP_GET, .handler = css_handler, .user_ctx = context};
     httpd_uri_t uri_js = {.uri = "/app.js", .method = HTTP_GET, .handler = js_handler, .user_ctx = context};
+    httpd_uri_t uri_face_detection = {
+        .uri = "/api/face-detections", .method = HTTP_GET, .handler = face_detection_handler, .user_ctx = context};
     httpd_uri_t uri_status = {.uri = "/api/status", .method = HTTP_GET, .handler = status_handler, .user_ctx = context};
     httpd_uri_t uri_capture = {.uri = "/api/capture", .method = HTTP_POST, .handler = capture_handler, .user_ctx = context};
     httpd_uri_t uri_manifest = {.uri = "/api/export/manifest", .method = HTTP_GET, .handler = manifest_handler, .user_ctx = context};
@@ -821,6 +942,7 @@ esp_err_t web_service_start(web_service_context_t *context)
     httpd_register_uri_handler(*context->server, &uri_root);
     httpd_register_uri_handler(*context->server, &uri_css);
     httpd_register_uri_handler(*context->server, &uri_js);
+    httpd_register_uri_handler(*context->server, &uri_face_detection);
     httpd_register_uri_handler(*context->server, &uri_status);
     httpd_register_uri_handler(*context->server, &uri_capture);
     httpd_register_uri_handler(*context->server, &uri_manifest);

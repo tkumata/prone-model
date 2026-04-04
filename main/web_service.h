@@ -7,6 +7,7 @@
 #include "app_config.h"
 #include "esp_err.h"
 #include "esp_http_server.h"
+#include "face_detection.h"
 #include "freertos/semphr.h"
 #include "storage.h"
 
@@ -24,7 +25,9 @@ typedef struct {
     httpd_handle_t *stream_server;
     SemaphoreHandle_t storage_mutex;
     SemaphoreHandle_t camera_mutex;
+    SemaphoreHandle_t face_detection_mutex;
     const storage_context_t *storage_context;
+    face_detection_result_t *face_detection;
     web_copy_status_snapshot_fn copy_status_snapshot;
     web_copy_runtime_snapshot_fn copy_runtime_snapshot;
     web_update_capture_status_fn update_capture_status;

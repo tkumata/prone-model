@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "esp_wifi.h"
+#include "face_detection.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
@@ -67,11 +68,13 @@ typedef struct {
     EventGroupHandle_t wifi_event_group;
     SemaphoreHandle_t storage_mutex;
     SemaphoreHandle_t camera_mutex;
+    SemaphoreHandle_t face_detection_mutex;
     SemaphoreHandle_t status_mutex;
     SemaphoreHandle_t runtime_mutex;
     collector_status_t status;
     app_runtime_t runtime;
     sdmmc_card_t *sdcard;
+    face_detection_result_t face_detection;
 } app_state_t;
 
 static app_state_t g_state = {
@@ -80,6 +83,7 @@ static app_state_t g_state = {
     .wifi_event_group = NULL,
     .storage_mutex = NULL,
     .camera_mutex = NULL,
+    .face_detection_mutex = NULL,
     .status_mutex = NULL,
     .runtime_mutex = NULL,
     .status = {
@@ -100,6 +104,7 @@ static app_state_t g_state = {
         .last_capture_id = 0,
     },
     .sdcard = NULL,
+    .face_detection = {0},
 };
 
 static esp_err_t start_web_server(void);
@@ -255,7 +260,9 @@ static void init_web_service_context(void)
     WEB_SERVICE_CONTEXT.stream_server = &g_state.stream_server;
     WEB_SERVICE_CONTEXT.storage_mutex = g_state.storage_mutex;
     WEB_SERVICE_CONTEXT.camera_mutex = g_state.camera_mutex;
+    WEB_SERVICE_CONTEXT.face_detection_mutex = g_state.face_detection_mutex;
     WEB_SERVICE_CONTEXT.storage_context = &STORAGE_CONTEXT;
+    WEB_SERVICE_CONTEXT.face_detection = &g_state.face_detection;
     WEB_SERVICE_CONTEXT.copy_status_snapshot = copy_status_snapshot;
     WEB_SERVICE_CONTEXT.copy_runtime_snapshot = copy_runtime_snapshot;
     WEB_SERVICE_CONTEXT.update_capture_status = update_capture_status_locked;
@@ -485,15 +492,18 @@ static void collector_main_task(void *arg)
     g_state.wifi_event_group = xEventGroupCreate();
     g_state.storage_mutex = xSemaphoreCreateMutex();
     g_state.camera_mutex = xSemaphoreCreateMutex();
+    g_state.face_detection_mutex = xSemaphoreCreateMutex();
     g_state.status_mutex = xSemaphoreCreateMutex();
     g_state.runtime_mutex = xSemaphoreCreateMutex();
     if (g_state.wifi_event_group == NULL || g_state.storage_mutex == NULL ||
-        g_state.camera_mutex == NULL || g_state.status_mutex == NULL ||
+        g_state.camera_mutex == NULL || g_state.face_detection_mutex == NULL ||
+        g_state.status_mutex == NULL ||
         g_state.runtime_mutex == NULL) {
         ESP_LOGE(TAG, "同期オブジェクトの生成に失敗しました");
         vTaskDelete(NULL);
         return;
     }
+    face_detection_result_reset(&g_state.face_detection, 0, 0, 0);
     init_web_service_context();
     lock_status();
     set_status_text(g_state.status.wifi, sizeof(g_state.status.wifi), "disconnected");
