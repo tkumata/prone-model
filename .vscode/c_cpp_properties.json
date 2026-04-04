@@ -3,11 +3,11 @@
     {
       "name": "ESP-IDF",
       "compilerPath": "${env:IDF_TOOLCHAIN_PATH}/xtensa-esp32s3-elf-gcc",
-      "compileCommands": "${workspaceFolder}/build-idf6/compile_commands.json",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
       "includePath": [
         "${workspaceFolder}/main",
         "${workspaceFolder}/managed_components/**",
-        "${workspaceFolder}/build-idf6/config",
+        "${workspaceFolder}/build/config",
         "${config:idf.currentSetup}/components/**",
         "${workspaceFolder}/**"
       ],
@@ -20,7 +20,7 @@
         "path": [
           "${workspaceFolder}/main",
           "${workspaceFolder}/managed_components",
-          "${workspaceFolder}/build-idf6/config",
+          "${workspaceFolder}/build/config",
           "${config:idf.currentSetup}/components",
           "${workspaceFolder}"
         ],

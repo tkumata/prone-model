@@ -192,6 +192,10 @@ Wi-Fi 認証情報は `sdkconfig` に保持します。
   - 用途: `ESP-IDF` ビルド生成物を保持する
   - 生成方法: `idf.py build` を実行すると自動生成される
   - 補足: 手動作成は不要
+- `.idf-python-env/`
+  - 用途: `ESP-IDF v6.0` 実行用のローカル Python 仮想環境
+  - 生成方法: `ESP-IDF v6.0` の Python 環境をプロジェクト内へ配置したときに生成される
+  - 補足: 本リポジトリでは `v6.0` を使い、旧版用の別名ディレクトリは持たない
 
 ## API
 
@@ -226,7 +230,7 @@ Wi-Fi 認証情報は `sdkconfig` に保持します。
 ## ビルド
 
 ```bash
-source ~/.espressif/v5.5.3/esp-idf/export.sh
+source ~/.espressif/v6.0/esp-idf/export.sh
 idf.py set-target esp32s3
 idf.py menuconfig
 idf.py build
