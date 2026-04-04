@@ -69,7 +69,7 @@ set(requires        dl_fft
 
 idf_component_register(SRCS ${srcs} SRC_DIRS ${src_dirs} INCLUDE_DIRS ${include_dirs} REQUIRES ${requires})
 
-component_compile_options(-ffast-math -O3 -Wno-error=format=-Wno-format)
+component_compile_options(-ffast-math -O3 -Wno-error=format -Wno-format)
 add_prebuilt_library(fbs_model fbs_loader/lib/${IDF_TARGET}/libfbs_model.a)
 target_link_libraries(${COMPONENT_LIB} PRIVATE fbs_model)
 
