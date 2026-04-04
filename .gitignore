@@ -19,6 +19,7 @@
 # Build artifacts and directories
 **/build/
 build/
+build-idf6/
 *.o
 *.a
 *.out
@@ -40,6 +41,7 @@ sdkconfig
 managed_components/
 # If ESP-IDF tools are installed/referenced locally to the project
 .espressif/
+.idf-tools/
 
 # CMake generated files
 CMakeCache.txt
@@ -60,6 +62,8 @@ dist/
 venv/
 .venv/
 env/
+.idf-python-env/
+.idf-python-env-6.0/
 
 # Language Servers
 .clangd/

@@ -50,6 +50,7 @@
 ルート画面 `/` には以下を配置します。
 
 - カメラストリーミング
+- カメラファインダー上のバウンディングボックス表示
 - 撮影ボタン
 - `うつ伏せ / 非うつ伏せ` ラジオボタン
 - `エクスポート` ボタン
@@ -67,6 +68,7 @@
 ### 現在のレイアウト
 
 - ストリーミング表示はスマホ操作を優先して小さめに表示する
+- ストリーミング上で顔を検出したときだけ、検出された顔の bbox を緑色で重ねて表示する
 - `撮影` ボタンはストリーミング上部に配置する
 - `エクスポート` と `SDカードリセット` は入力欄の下に配置する
 
@@ -190,6 +192,10 @@ Wi-Fi 認証情報は `sdkconfig` に保持します。
   - 用途: `ESP-IDF` ビルド生成物を保持する
   - 生成方法: `idf.py build` を実行すると自動生成される
   - 補足: 手動作成は不要
+- `.idf-python-env/`
+  - 用途: `ESP-IDF v6.0` 実行用のローカル Python 仮想環境
+  - 生成方法: `ESP-IDF v6.0` の Python 環境をプロジェクト内へ配置したときに生成される
+  - 補足: 本リポジトリでは `v6.0` を使い、旧版用の別名ディレクトリは持たない
 
 ## API
 
@@ -199,6 +205,8 @@ Wi-Fi 認証情報は `sdkconfig` に保持します。
   MJPEG ストリーム
 - `GET /api/status`
   状態取得
+- `GET /api/face-detections`
+  最新の顔検出 bbox 一覧
 - `POST /api/capture`
   撮影と保存
 - `GET /api/export/manifest`
@@ -222,7 +230,7 @@ Wi-Fi 認証情報は `sdkconfig` に保持します。
 ## ビルド
 
 ```bash
-source ~/.espressif/v5.5.3/esp-idf/export.sh
+source ~/.espressif/v6.0/esp-idf/export.sh
 idf.py set-target esp32s3
 idf.py menuconfig
 idf.py build

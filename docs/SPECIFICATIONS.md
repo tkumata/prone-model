@@ -106,6 +106,7 @@
 必須 UI:
 
 - カメラストリーミング
+- カメラファインダー上のバウンディングボックス表示
 - 撮影ボタン
 - `うつ伏せ / 非うつ伏せ` ラジオボタン
 - エクスポートボタン
@@ -119,6 +120,17 @@
 - 学習利用可否入力
 - 除外理由入力
 - `notes` 入力欄
+
+バウンディングボックス表示仕様:
+
+- ライブストリーム中に顔検出を継続実行する
+- 顔を検出したフレームの bbox だけを表示する
+- 表示数は検出された全顔
+- 顔未検出時は非表示
+- 形状は長方形
+- 表示色は緑系
+- 半透明枠で表示する
+- ストリーミング画像サイズに追従する
 
 ## 7. API 仕様
 
@@ -153,7 +165,39 @@
 }
 ```
 
-### 7.3 `POST /api/capture`
+### 7.3 `GET /api/face-detections`
+
+目的:
+
+- 最新の顔検出 bbox 一覧を返す
+
+レスポンス例:
+
+```json
+{
+  "detector_ready": true,
+  "frame_width": 320,
+  "frame_height": 240,
+  "updated_at_ms": 1710000000123,
+  "box_count": 1,
+  "boxes": [
+    {
+      "x": 96,
+      "y": 40,
+      "width": 88,
+      "height": 88,
+      "score": 0.91
+    }
+  ]
+}
+```
+
+エラー時挙動:
+
+- 顔未検出時は `box_count=0` と空配列を返す
+- 顔検出内部失敗時も HTTP は成功させ、空配列を返す
+
+### 7.4 `POST /api/capture`
 
 目的:
 
@@ -199,7 +243,7 @@
 }
 ```
 
-### 7.4 `GET /api/export/manifest`
+### 7.5 `GET /api/export/manifest`
 
 目的:
 
@@ -234,7 +278,7 @@
 }
 ```
 
-### 7.5 `GET /api/export/metadata`
+### 7.6 `GET /api/export/metadata`
 
 目的:
 
@@ -245,7 +289,7 @@
 - `200 OK`
 - `Content-Type: text/csv`
 
-### 7.6 `GET /api/export/image`
+### 7.7 `GET /api/export/image`
 
 目的:
 
@@ -264,7 +308,7 @@
 
 - 該当画像なし: `404 Not Found`
 
-### 7.7 `POST /api/reset`
+### 7.8 `POST /api/reset`
 
 目的:
 

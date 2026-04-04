@@ -1,4 +1,6 @@
 let toastSequence = 0;
+let bboxPollTimer = 0;
+let bboxPollInFlight = false;
 
 function el(id) {
   return document.getElementById(id);
@@ -10,6 +12,65 @@ function streamUrl() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clearBoundingBoxes() {
+  el("bbox_overlay").replaceChildren();
+}
+
+function renderBoundingBoxes(payload) {
+  const overlay = el("bbox_overlay");
+  const stream = el("stream_view");
+  const frameWidth = Number(payload.frame_width || 0);
+  const frameHeight = Number(payload.frame_height || 0);
+  const boxes = Array.isArray(payload.boxes) ? payload.boxes : [];
+  const rect = stream.getBoundingClientRect();
+  const scaleX = frameWidth > 0 ? rect.width / frameWidth : 0;
+  const scaleY = frameHeight > 0 ? rect.height / frameHeight : 0;
+
+  overlay.replaceChildren();
+  if (!payload.detector_ready || frameWidth <= 0 || frameHeight <= 0 || boxes.length === 0) {
+    return;
+  }
+
+  for (let index = 0; index < boxes.length; index += 1) {
+    const box = boxes[index];
+    const node = document.createElement("div");
+    node.className = "bbox_box";
+    node.style.left = Math.max(0, Number(box.x || 0) * scaleX) + "px";
+    node.style.top = Math.max(0, Number(box.y || 0) * scaleY) + "px";
+    node.style.width = Math.max(0, Number(box.width || 0) * scaleX) + "px";
+    node.style.height = Math.max(0, Number(box.height || 0) * scaleY) + "px";
+    overlay.appendChild(node);
+  }
+}
+
+async function refreshBoundingBoxes() {
+  if (bboxPollInFlight) {
+    return;
+  }
+
+  bboxPollInFlight = true;
+  try {
+    const response = await fetch("/api/face-detections", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("face detections " + response.status);
+    }
+    renderBoundingBoxes(await response.json());
+  } catch (_error) {
+    clearBoundingBoxes();
+  } finally {
+    bboxPollInFlight = false;
+  }
+}
+
+function startBoundingBoxPolling() {
+  if (bboxPollTimer !== 0) {
+    clearInterval(bboxPollTimer);
+  }
+  refreshBoundingBoxes();
+  bboxPollTimer = window.setInterval(refreshBoundingBoxes, 300);
+  window.addEventListener("resize", refreshBoundingBoxes);
 }
 
 function removeToast(toast) {
@@ -289,6 +350,7 @@ function bindEvents() {
 function initialize() {
   el("stream_view").src = streamUrl();
   bindEvents();
+  startBoundingBoxPolling();
   refreshStatus();
 }
 
