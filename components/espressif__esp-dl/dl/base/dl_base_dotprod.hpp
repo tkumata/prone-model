@@ -41,9 +41,5 @@ void mat_vec_dotprod(TM *matrix, TV *vector, TO *result, int rows, int cols, int
         dotprod(matrix_row, vector, result + i, cols, shift);
     }
 }
-template void mat_vec_dotprod(int8_t *matrix, int8_t *vector, int16_t *result, int rows, int cols, int shift);
-template void mat_vec_dotprod(int8_t *matrix, int16_t *vector, int16_t *result, int rows, int cols, int shift);
-template void mat_vec_dotprod(int16_t *matrix, int16_t *vector, int16_t *result, int rows, int cols, int shift);
-template void mat_vec_dotprod(float *matrix, float *vector, float *result, int rows, int cols, int shift);
 } // namespace base
 } // namespace dl
