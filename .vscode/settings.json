@@ -1,5 +1,5 @@
 {
-  "idf.currentSetup": "${env:IDF_PATH}",
+  "idf.currentSetup": "/Users/kumata/.espressif/v6.0/esp-idf",
   "idf.openOcdConfigs": ["board/esp32s3-builtin.cfg"],
   "idf.buildPath": "${workspaceFolder}/build",
   "idf.customExtraVars": {
