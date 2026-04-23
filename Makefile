@@ -7,7 +7,7 @@ format-check:
 	clang-format --dry-run --Werror $(SRC)
 
 lint:
-	cppcheck --enable=all --inconclusive --std=c11 --error-exitcode=1 src
+	cppcheck --enable=all --inconclusive --std=c11 --error-exitcode=1 main
 
 check: format-check lint
 
