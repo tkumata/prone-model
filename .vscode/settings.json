@@ -1,5 +1,5 @@
 {
-  "idf.currentSetup": "/Users/kumata/.espressif/v6.0/esp-idf",
+  "idf.currentSetup": "${env:HOME}/.espressif/v6.0/esp-idf",
   "idf.openOcdConfigs": ["board/esp32s3-builtin.cfg"],
   "idf.buildPath": "${workspaceFolder}/build",
   "idf.customExtraVars": {
@@ -10,9 +10,9 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=/Users/kumata/Developer/prone-model/build"
+    "--compile-commands-dir=${workspaceFolder}/build"
   ],
   "idf.flashType": "UART",
-  "clangd.path": "/Users/kumata/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
+  "clangd.path": "${env:HOME}/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
   "idf.port": "/dev/tty.usbmodem5AB90112901"
 }
