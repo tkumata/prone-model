@@ -1,13 +1,12 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "Stop": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "make check && make build",
-            "statusMessage": "[Codex Hooks] Running make check and build..."
+            "command": "./.codex/hooks/verify_pipeline.sh",
+            "timeout": 180
           }
         ]
       }
