@@ -383,7 +383,7 @@ Codex CLI と Copilot CLI の hook 差分を各設定ファイルへ閉じ込め
 flowchart TD
   A["Codex CLI Stop"] --> C[".codex/hooks.json"]
   B["Copilot CLI agentStop"] --> D[".github/hooks/hooks.json"]
-  C --> E[".agent-hooks/build.sh"]
+  C --> E[".agent-hooks/check_build.sh"]
   D --> E
   E --> F["Resolve IDF_PATH"]
   F --> G["source export.sh"]
@@ -422,7 +422,7 @@ flowchart TD
 sequenceDiagram
   participant Agent as "Agent"
   participant Hook as "Stop hook"
-  participant Harness as ".agent-hooks/build.sh"
+  participant Harness as ".agent-hooks/check_build.sh"
   participant IDF as "ESP-IDF"
 
   Agent->>Hook: "Stop or agentStop"

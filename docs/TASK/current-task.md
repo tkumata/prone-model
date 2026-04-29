@@ -18,7 +18,7 @@
 
 ## coder steps
 
-- 完了: `.agent-hooks/build.sh` に共有ハーネスを実装する
+- 完了: `.agent-hooks/check_build.sh` に共有ハーネスを実装する
 - 完了: `.codex/hooks.json` に Codex CLI `Stop` hook を定義する
 - 完了: `.github/hooks/hooks.json` に Copilot CLI `agentStop` hook を定義する
 - 完了: 同一イベント内の hook が記述順に実行されることを前提に build → size の順で組み込む

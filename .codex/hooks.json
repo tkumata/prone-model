@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".agent-hooks/build.sh",
+            "command": ".agent-hooks/check_build.sh",
             "timeout": 120,
             "statusMessage": "Running ESP-IDF build"
           },

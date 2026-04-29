@@ -581,12 +581,12 @@
 
 ### 17.1 構成
 
-- 共有ハーネス: `.agent-hooks/build.sh`
+- 共有ハーネス: `.agent-hooks/check_build.sh`
 - 共有サイズチェック: `.agent-hooks/check_size.sh`
 - Codex CLI hook 定義: `.codex/hooks.json`
 - Copilot CLI hook 定義: `.github/hooks/hooks.json`
 
-Codex CLI と Copilot CLI はどちらも `.agent-hooks/build.sh` を呼び出し、同一イベント配下の複数 hook は記述順に実行されるため、その直後に `.agent-hooks/check_size.sh` を続ける。
+Codex CLI と Copilot CLI はどちらも `.agent-hooks/check_build.sh` を呼び出し、同一イベント配下の複数 hook は記述順に実行されるため、その直後に `.agent-hooks/check_size.sh` を続ける。
 
 ### 17.2 実行契機
 
