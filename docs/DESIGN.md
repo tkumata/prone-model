@@ -368,3 +368,98 @@ artifacts/
 - 収集後に学習用フィルタを機械的に適用可能
 - PC 上で `ONNX` および `ESP-DL` モデル生成条件を再現可能
 - 最終的に `Freenove ESP32-S3 WROOM CAM` 上での検知成立条件を監査可能
+
+## 15. エージェント停止時 ESP-IDF ビルドハーネス設計
+
+### 15.1 設計方針
+
+Codex CLI と Copilot CLI の hook 差分を各設定ファイルへ閉じ込め、ビルド実行、ログ保存、失敗時メッセージ生成は `.agent-hooks/` の共有ハーネスへ集約する。
+
+これにより、ESP-IDF 環境解決やエラー要約の挙動を 1 箇所で保守できる。
+
+### 15.2 論理構成
+
+```mermaid
+flowchart TD
+  A["Codex CLI Stop"] --> C[".codex/hooks.json"]
+  B["Copilot CLI agentStop"] --> D[".github/hooks/hooks.json"]
+  C --> E[".agent-hooks/build.sh"]
+  D --> E
+  E --> F["Resolve IDF_PATH"]
+  F --> G["source export.sh"]
+  G --> H["idf.py build"]
+  H --> I{"Build result"}
+  I -->|success| J["Exit 0"]
+  I -->|failure| K["Write log and summarize"]
+  K --> L["Return fix instruction"]
+```
+
+### 15.3 ディレクトリ責務
+
+`.agent-hooks/` は共有ハーネスの責務を持つ。
+
+- ESP-IDF 環境解決
+- `export.sh` 読み込み
+- `idf.py build` 実行
+- ログ保存
+- エラー要約
+- エージェント向け修正指示の生成
+
+`.codex/` は Codex CLI 用 hook 定義だけを持つ。
+
+`.github/hooks/` は Copilot CLI 用 hook 定義だけを持つ。
+
+### 15.4 失敗時シーケンス
+
+```mermaid
+sequenceDiagram
+  participant Agent as "Agent"
+  participant Hook as "Stop hook"
+  participant Harness as ".agent-hooks/build.sh"
+  participant IDF as "ESP-IDF"
+
+  Agent->>Hook: "Stop or agentStop"
+  Hook->>Harness: "Run build harness"
+  Harness->>IDF: "source export.sh"
+  Harness->>IDF: "idf.py build"
+  IDF-->>Harness: "Build error"
+  Harness->>Harness: "Save full log"
+  Harness->>Harness: "Extract error summary"
+  Harness-->>Hook: "Non-zero exit and fix instruction"
+  Hook-->>Agent: "Build failed. Fix the reported errors."
+```
+
+### 15.5 環境解決設計
+
+`IDF_PATH` が存在する場合は、現在の shell または CLI が提供した環境を尊重する。
+
+`IDF_PATH` が存在しない場合は、このリポジトリの ESP-IDF v6.0 標準に合わせ、`$HOME/.espressif/v6.0/esp-idf` を候補にする。
+
+`IDF_TOOLCHAIN_PATH` には依存しない。ESP-IDF の export は toolchain を `PATH` へ追加するため、特定の toolchain 環境変数を前提にしない。
+
+既存 `build/` がある場合、`build/CMakeCache.txt` に記録された `PYTHON` と異なる Python 環境で `idf.py build` を実行すると ESP-IDF が停止する。同じ venv でも `python` と `python3` の実行パス文字列が異なると失敗するため、`CMakeCache.txt` から構成済み Python を検出し、その Python で `$IDF_PATH/tools/idf.py build` を実行する。
+
+### 15.6 エラー要約設計
+
+失敗時は全ログを返すのではなく、修正に必要な行を優先して抽出する。
+
+優先する語句は次とする。
+
+- `error:`
+- `warning:`
+- `FAILED:`
+- `CMake Error`
+- `ninja failed`
+- `undefined reference`
+- `No such file or directory`
+
+抽出できない場合はログ末尾を返す。
+
+hook ランナーへは stdout の JSON で停止指示を返し、stderr には人間が読める要約を返す。JSON には `continue=false` と Codex `Stop` 用の `decision=block` を両方含める。
+
+### 15.7 保守方針
+
+- hook 設定ファイルに ESP-IDF 環境解決ロジックを書かない
+- 共有ハーネスに CLI 固有イベント名の分岐を持たせない
+- build 以外の destructive 操作を実行しない
+- firmware flash はこの hook の責務に含めない

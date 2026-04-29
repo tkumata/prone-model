@@ -576,3 +576,78 @@
 - 分割エクスポートを途中再試行しても全件取得できる
 - PC 上で同一前処理条件から `float` モデル、`ONNX`、`ESP-DL` 形式モデルを再生成できる
 - 実機確認用集合で `Freenove ESP32-S3 WROOM CAM` 上の `prone / non_prone` 検知が合格基準を満たす
+
+## 17. エージェント停止時 ESP-IDF ビルドハーネス仕様
+
+### 17.1 構成
+
+- 共有ハーネス: `.agent-hooks/build.sh`
+- Codex CLI hook 定義: `.codex/hooks.json`
+- Copilot CLI hook 定義: `.github/hooks/hooks.json`
+
+Codex CLI と Copilot CLI はどちらも `.agent-hooks/build.sh` を呼び出す。
+
+### 17.2 実行契機
+
+- Codex CLI: `Stop`
+- Copilot CLI: `agentStop`
+
+### 17.3 実行環境解決
+
+共有ハーネスは次の順で ESP-IDF 環境を解決する。
+
+1. 既存の `IDF_PATH`
+2. `$HOME/.espressif/v6.0/esp-idf`
+
+`export.sh` は解決した `IDF_PATH` 配下から読み込む。
+
+`IDF_PYTHON_ENV_PATH` が未設定の場合は、既存 `build/CMakeCache.txt` の `PYTHON` から構成済み Python 環境を検出して優先する。既存 build tree がない場合のみ、リポジトリ内 `.idf-python-env/` を候補にする。
+
+### 17.4 ビルドコマンド
+
+共有ハーネスはリポジトリルートで以下と同等の処理を行う。
+
+```sh
+source "$IDF_PATH/export.sh"
+idf.py build
+```
+
+既存 `build/CMakeCache.txt` に `PYTHON` が記録されている場合は、ESP-IDF の Python 環境不一致検出を避けるため、その Python で `$IDF_PATH/tools/idf.py build` を実行する。
+
+実装時は shell の終了コードを保持し、`source` または `idf.py build` が失敗した場合に hook 全体を失敗扱いにする。
+
+### 17.5 ログ仕様
+
+- 標準出力と標準エラーを同一ログへ保存する
+- ログ保存先は `.agent-hooks/logs/` 配下とする
+- 最新ログを固定名で参照できるようにする
+- 失敗時は最新ログからエラー要約を生成する
+- 成功時は冗長なログ本文をエージェントへ返さない
+
+### 17.6 失敗時出力仕様
+
+失敗時は次を含むメッセージを返す。
+
+- 実行したビルド種別
+- 終了コード
+- エラー要約
+- ログファイルパス
+- エージェントへの修正指示
+
+修正指示は、ビルドエラーを修正し、再度 ESP-IDF build を通すことを明示する。
+
+stdout には hook ランナー向け JSON を返す。共通フィールドとして `continue=false`, `stopReason`, `systemMessage` を含め、Codex `Stop` 向けに `hookSpecificOutput.decision=block` と `hookSpecificOutput.reason` も含める。
+
+stderr には同じ要旨を人間が読める形式で返す。
+
+### 17.7 終了コード仕様
+
+- `0`: ESP-IDF build 成功
+- `1`: ESP-IDF 環境解決失敗
+- `2`: `idf.py build` 失敗
+
+### 17.8 セキュリティ仕様
+
+- Wi-Fi 認証情報を出力しない
+- secret と判定できる環境変数を列挙しない
+- ログ要約はビルドエラーに必要な範囲に限定する

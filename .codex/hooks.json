@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".agent-hooks/build.sh",
+            "timeout": 120,
+            "statusMessage": "Running ESP-IDF build"
+          }
+        ]
+      }
+    ]
+  }
+}
