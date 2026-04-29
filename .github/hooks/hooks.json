@@ -7,6 +7,12 @@
         "bash": ".agent-hooks/build.sh",
         "cwd": ".",
         "timeoutSec": 120
+      },
+      {
+        "type": "command",
+        "bash": ".agent-hooks/check_size.sh",
+        "cwd": ".",
+        "timeoutSec": 120
       }
     ]
   }

@@ -369,11 +369,11 @@ artifacts/
 - PC 上で `ONNX` および `ESP-DL` モデル生成条件を再現可能
 - 最終的に `Freenove ESP32-S3 WROOM CAM` 上での検知成立条件を監査可能
 
-## 15. エージェント停止時 ESP-IDF ビルドハーネス設計
+## 15. エージェント停止時 ESP-IDF ビルド/サイズハーネス設計
 
 ### 15.1 設計方針
 
-Codex CLI と Copilot CLI の hook 差分を各設定ファイルへ閉じ込め、ビルド実行、ログ保存、失敗時メッセージ生成は `.agent-hooks/` の共有ハーネスへ集約する。
+Codex CLI と Copilot CLI の hook 差分を各設定ファイルへ閉じ込め、ビルド実行、サイズ確認、ログ保存、失敗時メッセージ生成は `.agent-hooks/` の共有ハーネスへ集約する。
 
 これにより、ESP-IDF 環境解決やエラー要約の挙動を 1 箇所で保守できる。
 
@@ -389,9 +389,15 @@ flowchart TD
   F --> G["source export.sh"]
   G --> H["idf.py build"]
   H --> I{"Build result"}
-  I -->|success| J["Exit 0"]
+  I -->|success| J[".agent-hooks/check_size.sh"]
   I -->|failure| K["Write log and summarize"]
-  K --> L["Return fix instruction"]
+  J --> L["source export.sh"]
+  L --> M["idf.py size"]
+  M --> N{"Size result"}
+  N -->|success| O["Exit 0"]
+  N -->|failure| P["Write log and summarize"]
+  K --> Q["Return fix instruction"]
+  P --> Q
 ```
 
 ### 15.3 ディレクトリ責務
@@ -401,6 +407,7 @@ flowchart TD
 - ESP-IDF 環境解決
 - `export.sh` 読み込み
 - `idf.py build` 実行
+- `check_size.sh` を用いた 6 MiB 上限のサイズ確認
 - ログ保存
 - エラー要約
 - エージェント向け修正指示の生成
@@ -439,7 +446,11 @@ sequenceDiagram
 
 既存 `build/` がある場合、`build/CMakeCache.txt` に記録された `PYTHON` と異なる Python 環境で `idf.py build` を実行すると ESP-IDF が停止する。同じ venv でも `python` と `python3` の実行パス文字列が異なると失敗するため、`CMakeCache.txt` から構成済み Python を検出し、その Python で `$IDF_PATH/tools/idf.py build` を実行する。
 
-### 15.6 エラー要約設計
+### 15.6 サイズ確認設計
+
+build 成功後に `source "$HOME/.espressif/v6.0/export.sh" && idf.py size` を実行し、`Total image size` が 6 MiB 以下なら成功とする。
+
+### 15.7 エラー要約設計
 
 失敗時は全ログを返すのではなく、修正に必要な行を優先して抽出する。
 
@@ -457,7 +468,7 @@ sequenceDiagram
 
 hook ランナーへは stdout の JSON で停止指示を返し、stderr には人間が読める要約を返す。JSON には `continue=false` と Codex `Stop` 用の `decision=block` を両方含める。
 
-### 15.7 保守方針
+### 15.8 保守方針
 
 - hook 設定ファイルに ESP-IDF 環境解決ロジックを書かない
 - 共有ハーネスに CLI 固有イベント名の分岐を持たせない

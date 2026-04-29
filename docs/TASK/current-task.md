@@ -21,6 +21,7 @@
 - 完了: `.agent-hooks/build.sh` に共有ハーネスを実装する
 - 完了: `.codex/hooks.json` に Codex CLI `Stop` hook を定義する
 - 完了: `.github/hooks/hooks.json` に Copilot CLI `agentStop` hook を定義する
+- 完了: 同一イベント内の hook が記述順に実行されることを前提に build → size の順で組み込む
 - 完了: 失敗時出力を確認する
 - 完了: ESP-IDF build 成功を確認する
 
@@ -28,6 +29,7 @@
 
 - 完了: hook 設定は共有ハーネスを呼ぶだけである
 - 完了: build 成功時は hook が成功終了する
+- 完了: build 後に 6 MiB 上限の size check が走る
 - 完了: build 失敗時は hook が非ゼロ終了し、修正指示を返す
 - 完了: ログは `.agent-hooks/logs/` から確認できる
 - 完了: 関連ドキュメントが実装内容と同期している

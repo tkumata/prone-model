@@ -9,6 +9,12 @@
             "command": ".agent-hooks/build.sh",
             "timeout": 120,
             "statusMessage": "Running ESP-IDF build"
+          },
+          {
+            "type": "command",
+            "command": ".agent-hooks/check_size.sh",
+            "timeout": 120,
+            "statusMessage": "Checking ESP-IDF size"
           }
         ]
       }
