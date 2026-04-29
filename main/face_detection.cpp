@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "human_face_detect.hpp"
 #include "img_converters.h"
+#include "safety_harness.h"
 
 namespace {
 constexpr const char *TAG = "face_detection";
@@ -90,14 +91,14 @@ extern "C" esp_err_t face_detection_run_jpeg(const uint8_t *jpeg_data,
     }
     out_result->detector_ready = true;
 
-    rgb888_buffer = static_cast<uint8_t *>(malloc(static_cast<size_t>(frame_width) * static_cast<size_t>(frame_height) * 3U));
+    rgb888_buffer = static_cast<uint8_t *>(SH_ALLOC_BYTES(static_cast<size_t>(frame_width) * static_cast<size_t>(frame_height) * 3U));
     if (rgb888_buffer == nullptr) {
         return ESP_ERR_NO_MEM;
     }
 
     if (!fmt2rgb888(jpeg_data, jpeg_len, PIXFORMAT_JPEG, rgb888_buffer)) {
         ESP_LOGW(TAG, "JPEG から RGB888 への変換に失敗しました");
-        free(rgb888_buffer);
+        SH_FREE(rgb888_buffer);
         return ESP_FAIL;
     }
 
@@ -134,6 +135,6 @@ extern "C" esp_err_t face_detection_run_jpeg(const uint8_t *jpeg_data,
     }
 
     out_result->box_count = box_index;
-    free(rgb888_buffer);
+    SH_FREE(rgb888_buffer);
     return ESP_OK;
 }

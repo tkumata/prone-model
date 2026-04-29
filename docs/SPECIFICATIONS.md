@@ -651,3 +651,41 @@ stderr には同じ要旨を人間が読める形式で返す。
 - Wi-Fi 認証情報を出力しない
 - secret と判定できる環境変数を列挙しない
 - ログ要約はビルドエラーに必要な範囲に限定する
+
+## 18. C 言語安全ハーネス仕様
+
+### 18.1 目的
+
+自前コードでセグメンテーションフォルトや OOM を招きやすい書き方を、ビルド時に止める。
+
+### 18.2 対象
+
+- `main/`
+- プロジェクト内 `components/`
+- `components/espressif__*` と `managed_components/` は対象外
+
+### 18.3 提供 API
+
+- `SH_ALLOC_BYTES(size)`
+- `SH_CALLOC(count, size)`
+- `SH_FREE(ptr)`
+- `SH_SAFE_RETURN_IF_NULL(ptr, error_code)`
+
+### 18.4 禁止 API
+
+- `malloc`
+- `calloc`
+- `realloc`
+- `free`
+- `strcpy`
+- `strcat`
+- `sprintf`
+- `vsprintf`
+- `gets`
+- `alloca`
+
+### 18.5 検査
+
+- configure 時に禁止 API を走査する
+- 違反が 1 件でもあれば build を止める
+- 安全ラッパーを使うコードだけを許可する

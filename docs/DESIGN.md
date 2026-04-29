@@ -463,3 +463,40 @@ hook ランナーへは stdout の JSON で停止指示を返し、stderr には
 - 共有ハーネスに CLI 固有イベント名の分岐を持たせない
 - build 以外の destructive 操作を実行しない
 - firmware flash はこの hook の責務に含めない
+
+## 16. C 言語安全ハーネス設計
+
+### 16.1 目的
+
+セグメンテーションフォルトや OOM を起こしやすい C/C++ の書き方を、ビルド時に検出して止める。
+
+### 16.2 対象範囲
+
+- 自前コードの `main/`
+- プロジェクト内 `components/`
+- ベンダー由来の `components/espressif__*` と `managed_components/` は対象外
+
+### 16.3 強制方式
+
+- `components/safety_harness/include/safety_harness.h` に安全ラッパーを置く
+- `SH_ALLOC_BYTES`, `SH_CALLOC`, `SH_FREE`, `SH_SAFE_RETURN_IF_NULL` を提供する
+- `components/safety_harness/tools/check_safety_rules.py` で禁止 API をビルド時に検査する
+
+### 16.4 禁止対象
+
+- `malloc`
+- `calloc`
+- `realloc`
+- `free`
+- `strcpy`
+- `strcat`
+- `sprintf`
+- `vsprintf`
+- `gets`
+- `alloca`
+
+### 16.5 運用
+
+- 禁止 API は自前コードに残さない
+- 動的確保は安全ラッパー経由に統一する
+- ルール違反が見つかったら configure 時点で失敗させる
