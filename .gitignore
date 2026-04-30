@@ -87,3 +87,6 @@ artifacts/
 *.pth
 *.onnx
 *.espdl
+
+# Harness
+.agent-hooks/logs/

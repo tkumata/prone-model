@@ -368,3 +368,146 @@ artifacts/
 - 収集後に学習用フィルタを機械的に適用可能
 - PC 上で `ONNX` および `ESP-DL` モデル生成条件を再現可能
 - 最終的に `Freenove ESP32-S3 WROOM CAM` 上での検知成立条件を監査可能
+
+## 15. エージェント停止時 ESP-IDF ビルド/サイズハーネス設計
+
+### 15.1 設計方針
+
+Codex CLI と Copilot CLI の hook 差分を各設定ファイルへ閉じ込め、ビルド実行、サイズ確認、ログ保存、失敗時メッセージ生成は `.agent-hooks/` の共有ハーネスへ集約する。
+
+これにより、ESP-IDF 環境解決やエラー要約の挙動を 1 箇所で保守できる。
+
+### 15.2 論理構成
+
+```mermaid
+flowchart TD
+  A["Codex CLI Stop"] --> C[".codex/hooks.json"]
+  B["Copilot CLI agentStop"] --> D[".github/hooks/hooks.json"]
+  C --> E[".agent-hooks/check_build.sh"]
+  D --> E
+  E --> F["Resolve IDF_PATH"]
+  F --> G["source export.sh"]
+  G --> H["idf.py build"]
+  H --> I{"Build result"}
+  I -->|success| J[".agent-hooks/check_size.sh"]
+  I -->|failure| K["Write log and summarize"]
+  J --> L["source export.sh"]
+  L --> M["idf.py size"]
+  M --> N{"Size result"}
+  N -->|success| O["Exit 0"]
+  N -->|failure| P["Write log and summarize"]
+  K --> Q["Return fix instruction"]
+  P --> Q
+```
+
+### 15.3 ディレクトリ責務
+
+`.agent-hooks/` は共有ハーネスの責務を持つ。
+
+- ESP-IDF 環境解決
+- `export.sh` 読み込み
+- `idf.py build` 実行
+- `check_size.sh` を用いた 6 MiB 上限のサイズ確認
+- ログ保存
+- エラー要約
+- エージェント向け修正指示の生成
+
+`.codex/` は Codex CLI 用 hook 定義だけを持つ。
+
+`.github/hooks/` は Copilot CLI 用 hook 定義だけを持つ。
+
+### 15.4 失敗時シーケンス
+
+```mermaid
+sequenceDiagram
+  participant Agent as "Agent"
+  participant Hook as "Stop hook"
+  participant Harness as ".agent-hooks/check_build.sh"
+  participant IDF as "ESP-IDF"
+
+  Agent->>Hook: "Stop or agentStop"
+  Hook->>Harness: "Run build harness"
+  Harness->>IDF: "source export.sh"
+  Harness->>IDF: "idf.py build"
+  IDF-->>Harness: "Build error"
+  Harness->>Harness: "Save full log"
+  Harness->>Harness: "Extract error summary"
+  Harness-->>Hook: "Non-zero exit and fix instruction"
+  Hook-->>Agent: "Build failed. Fix the reported errors."
+```
+
+### 15.5 環境解決設計
+
+`IDF_PATH` が存在する場合は、現在の shell または CLI が提供した環境を尊重する。
+
+`IDF_PATH` が存在しない場合は、このリポジトリの ESP-IDF v6.0 標準に合わせ、`$HOME/.espressif/v6.0/esp-idf` を候補にする。
+
+`IDF_TOOLCHAIN_PATH` には依存しない。ESP-IDF の export は toolchain を `PATH` へ追加するため、特定の toolchain 環境変数を前提にしない。
+
+既存 `build/` がある場合、`build/CMakeCache.txt` に記録された `PYTHON` と異なる Python 環境で `idf.py build` を実行すると ESP-IDF が停止する。同じ venv でも `python` と `python3` の実行パス文字列が異なると失敗するため、`CMakeCache.txt` から構成済み Python を検出し、その Python で `$IDF_PATH/tools/idf.py build` を実行する。
+
+### 15.6 サイズ確認設計
+
+build 成功後に `source "$HOME/.espressif/v6.0/export.sh" && idf.py size` を実行し、`Total image size` が 6 MiB 以下なら成功とする。
+
+### 15.7 エラー要約設計
+
+失敗時は全ログを返すのではなく、修正に必要な行を優先して抽出する。
+
+優先する語句は次とする。
+
+- `error:`
+- `warning:`
+- `FAILED:`
+- `CMake Error`
+- `ninja failed`
+- `undefined reference`
+- `No such file or directory`
+
+抽出できない場合はログ末尾を返す。
+
+hook ランナーへは stdout の JSON で停止指示を返し、stderr には人間が読める要約を返す。JSON には `continue=false` と Codex `Stop` 用の `decision=block` を両方含める。
+
+### 15.8 保守方針
+
+- hook 設定ファイルに ESP-IDF 環境解決ロジックを書かない
+- 共有ハーネスに CLI 固有イベント名の分岐を持たせない
+- build 以外の destructive 操作を実行しない
+- firmware flash はこの hook の責務に含めない
+
+## 16. C 言語安全ハーネス設計
+
+### 16.1 目的
+
+セグメンテーションフォルトや OOM を起こしやすい C/C++ の書き方を、ビルド時に検出して止める。
+
+### 16.2 対象範囲
+
+- 自前コードの `main/`
+- プロジェクト内 `components/`
+- ベンダー由来の `components/espressif__*` と `managed_components/` は対象外
+
+### 16.3 強制方式
+
+- `components/safety_harness/include/safety_harness.h` に安全ラッパーを置く
+- `SH_ALLOC_BYTES`, `SH_CALLOC`, `SH_FREE`, `SH_SAFE_RETURN_IF_NULL` を提供する
+- `components/safety_harness/tools/check_safety_rules.py` で禁止 API をビルド時に検査する
+
+### 16.4 禁止対象
+
+- `malloc`
+- `calloc`
+- `realloc`
+- `free`
+- `strcpy`
+- `strcat`
+- `sprintf`
+- `vsprintf`
+- `gets`
+- `alloca`
+
+### 16.5 運用
+
+- 禁止 API は自前コードに残さない
+- 動的確保は安全ラッパー経由に統一する
+- ルール違反が見つかったら configure 時点で失敗させる
